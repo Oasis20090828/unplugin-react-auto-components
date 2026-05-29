@@ -11,12 +11,6 @@
 - **TypeScript** — generates `components.d.ts` so the editor stops complaining
 - **Build-tool agnostic** — Vite, Webpack, Rollup, Rspack, esbuild (powered by [unplugin](https://github.com/Oasis20090828/unplugin-react-auto-components.git))
 
-## Install
-
-```bash
-npm i unplugin-react-components -D
-```
-
 ## Vite
 
 ```ts
