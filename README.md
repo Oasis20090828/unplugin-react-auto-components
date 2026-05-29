@@ -22,13 +22,13 @@ npm i unplugin-react-components -D
 ```ts
 // vite.config.ts
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react/vite";
 import Components from "unplugin-react-components/vite";
 
 export default defineConfig({
   plugins: [
     react(),
-    Components.vite({
+    Components({
       dirs: ["src/components"],
       dts: true,
     }),
