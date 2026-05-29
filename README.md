@@ -1,6 +1,6 @@
 # unplugin-react-components
 
-> Auto-import React components on-demand. Inspired by [unplugin-vue-components](https://github.com/unplugin/unplugin-vue-components).
+> Auto-import React components on-demand. Inspired by [unplugin-vue-components](https://github.com/Oasis20090828/unplugin-react-auto-components.git).
 
 ## Features
 
@@ -9,7 +9,7 @@
 - **UI library presets** — built-in resolvers for Ant Design, MUI, Chakra UI, React Icons
 - **Pluggable** — write your own resolver in a few lines
 - **TypeScript** — generates `components.d.ts` so the editor stops complaining
-- **Build-tool agnostic** — Vite, Webpack, Rollup, Rspack, esbuild (powered by [unplugin](https://github.com/unjs/unplugin))
+- **Build-tool agnostic** — Vite, Webpack, Rollup, Rspack, esbuild (powered by [unplugin](https://github.com/Oasis20090828/unplugin-react-auto-components.git))
 
 ## Install
 
