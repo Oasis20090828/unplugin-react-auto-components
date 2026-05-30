@@ -138,23 +138,16 @@ Components({ resolvers: [ChakraUIResolver()] });
 ### Custom resolver
 
 ```ts
-import type { ComponentResolver } from "unplugin-react-components";
+import { createResolver } from "unplugin-react-components";
 
-function MyLibResolver(): ComponentResolver {
-  return {
-    type: "component",
-    resolve(name) {
-      if (name.startsWith("My")) {
-        return {
-          name,
-          from: `my-lib/${name}`,
-          importName: name,
-          isDefault: false,
-        };
-      }
-    },
-  };
-}
+Components({
+  resolvers: [
+    createResolver({
+      module: "my-lib",
+      prefix: "My",
+    }),
+  ],
+});
 ```
 
 ## Options
