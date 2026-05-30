@@ -5,7 +5,6 @@ export {}
 declare global {
   const App: typeof import('./src/App')['default']
   const HelloWorld: typeof import('./src/components/HelloWorld')['default']
-  const Test: typeof import('./src/components/Test')['default']
   const AntAffix: typeof import('antd')['Affix']
   const AntAlert: typeof import('antd')['Alert']
   const AntAnchor: typeof import('antd')['Anchor']

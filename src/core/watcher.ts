@@ -23,11 +23,16 @@ export interface ComponentWatcherOptions {
   emitDts?: () => void;
   /**
    * Called once per `process.nextTick` batch *after* all events in this batch
-   * have already been applied to `components` and `emitDts` has run. Receives
-   * the full batched event list — host hooks use it to fire a single coalesced
-   * action (Vite: one `ws.send`, Webpack: one `watching.invalidate()`).
+   * have already been applied to `components`. Receives the full batched event
+   * list plus a `changed` flag — `false` means the events were a no-op (e.g. a
+   * body-only edit that left every exported name and type intact). Hosts can
+   * skip their reload/invalidate work when `changed` is `false` to avoid
+   * spurious full-reloads.
    */
-  onFlush?: (events: FileEvent[]) => void;
+  onFlush?: (
+    events: FileEvent[],
+    info: { changed: boolean },
+  ) => void;
 }
 
 const isComponentFile = (file: string) => /\.(?:tsx|jsx)$/.test(file);
@@ -63,11 +68,20 @@ export function attachComponentHandlers(
     }
   };
 
+  const fingerprint = (c: { name: string; type: string; path: string }) =>
+    `${c.name}|${c.type}|${c.path}`;
+
   const drain = () => {
     scheduled = false;
     if (!queue.length) return;
     const events = queue;
     queue = [];
+
+    // Pre-state fingerprint so we can tell whether anything *actually* changed
+    // after applying the batch (vs. e.g. a body-only edit that leaves every
+    // exported name + type intact). Cheap — O(n) string concat per event tick.
+    const beforeFp = new Set<string>();
+    for (const c of components) beforeFp.add(fingerprint(c));
 
     for (const e of events) {
       const target = slash(e.path);
@@ -75,12 +89,42 @@ export function attachComponentHandlers(
       // then (for add/change) re-scan to pick up the file's current exports.
       removeForPath(target);
       if (e.type !== "unlink") {
-        for (const c of scanFile(e.path)) components.add(c);
+        for (const c of scanFile(e.path)) {
+          // Warn on a duplicate local component name from a *different* file.
+          // The second registration silently wins; making that visible is
+          // worth the one-time scan.
+          let conflict: { path: string } | undefined;
+          for (const x of components) {
+            if (x.name === c.name && x.path !== c.path) {
+              conflict = x;
+              break;
+            }
+          }
+          if (conflict) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[unplugin-react-components] duplicate local component name "${c.name}": ` +
+                `${c.path} clashes with ${conflict.path}. The newer one wins.`,
+            );
+          }
+          components.add(c);
+        }
       }
     }
 
-    emitDts?.();
-    onFlush?.(events);
+    // Did the set actually change?
+    let changed = components.size !== beforeFp.size;
+    if (!changed) {
+      for (const c of components) {
+        if (!beforeFp.has(fingerprint(c))) {
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    if (changed) emitDts?.();
+    onFlush?.(events, { changed });
   };
 
   const schedule = () => {
@@ -119,13 +163,12 @@ export function createComponentWatcher(
     // Initial scan was already done by `searchGlob` in the factory; this
     // watcher only handles deltas.
     ignoreInitial: true,
-    // Wait until the file size stops changing before firing. This is the
-    // chokidar-level "write finished" guard — replaces the JS-side
-    // setTimeout debounce we used to have.
-    awaitWriteFinish: {
-      stabilityThreshold: 100,
-      pollInterval: 50,
-    },
+    // No `awaitWriteFinish`: it adds a 100ms floor to every event in exchange
+    // for guarding against half-written files. Modern editors save atomically
+    // (write-tmp + rename), so the guard mostly burns latency. If a file *is*
+    // written in chunks, the first `scanFile` may yield partial results, but
+    // the resulting dts will be replaced by the next `change` event — and our
+    // generateDts skips identical writes, so no churn downstream.
   });
   return attachComponentHandlers(watcher, options);
 }

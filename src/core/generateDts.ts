@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, relative, resolve } from "path";
 import type {
   ComponentResolveResult,
@@ -54,6 +54,20 @@ export function generateDts(options: GenerateDtsOptions) {
 
   const dts = lines.join("\n");
   const outPath = resolve(rootPath, `${filename}.d.ts`);
+
+  // Skip the write when the file content is already identical. The big win is
+  // that the editor's TS server won't see a no-op file change → no needless
+  // type-check pass. This matters because every chokidar `change` event on a
+  // component file currently triggers `emitDts`, even when the file's *exports*
+  // didn't change (the user just edited the JSX body).
+  if (existsSync(outPath)) {
+    try {
+      if (readFileSync(outPath, "utf-8") === dts) return dts;
+    } catch {
+      // fall through to write
+    }
+  }
+
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, dts, "utf-8");
 

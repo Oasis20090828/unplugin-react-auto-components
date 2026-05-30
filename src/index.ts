@@ -116,9 +116,11 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
           rootDir: options.rootDir,
           components: searchGlobResult,
           emitDts,
-          onFlush: (events) => {
-            // Only structural changes need a page-level reload; pure `change`
-            // events are best left to Vite's per-module HMR.
+          onFlush: (events, { changed }) => {
+            // `changed === false` means the batch was a no-op (body-only edit
+            // etc.) — no need to reload. Also skip pure-`change` events; Vite's
+            // per-module HMR handles those.
+            if (!changed) return;
             const structural = events.some(
               (e) => e.type === "add" || e.type === "unlink",
             );
@@ -151,12 +153,12 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
           rootDir: options.rootDir,
           components: searchGlobResult,
           emitDts,
-          onFlush: (events) => {
-            // The watcher already coalesces events into a per-tick batch via
-            // `process.nextTick`, so `onFlush` already fires once per tick.
-            // We just stash the events for the upcoming compilation hook and
-            // ask webpack to rebuild. `invalidate()` is idempotent — fine if
-            // it ends up called more than once per rebuild.
+          onFlush: (events, { changed }) => {
+            // No actual change → don't bother webpack. The watcher already
+            // coalesces same-tick events via `process.nextTick`, so `onFlush`
+            // fires at most once per tick. We stash events for the next
+            // compilation hook and ask webpack to rebuild.
+            if (!changed) return;
             fileDepQueue.push(...events);
             compiler.watching?.invalidate();
           },

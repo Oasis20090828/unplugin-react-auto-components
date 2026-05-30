@@ -73,6 +73,31 @@ describe('createComponentWatcher (batched via process.nextTick)', () => {
     await watcher.close()
   }, 10000)
 
+  it('reports changed=false when a change event leaves exports identical', async () => {
+    // Re-fire a `change` event on the existing seed file. scanFile re-reads it
+    // and returns the same component → fingerprint match → no-op batch.
+    let lastInfo: { changed: boolean } | undefined
+    let emits = 0
+    const watcher = createComponentWatcher({
+      rootDir: root,
+      components,
+      emitDts: () => { emits++ },
+      onFlush: (_e, info) => { lastInfo = info },
+    })
+    await new Promise<void>((r) => watcher.once('ready', () => r()))
+    const baseEmits = emits
+
+    watcher.emit('change', join(root, 'src', 'Existing.tsx'))
+    await new Promise<void>((r) => process.nextTick(() => r()))
+
+    expect(lastInfo).toBeDefined()
+    expect(lastInfo!.changed).toBe(false)
+    // emitDts must be skipped on a no-op batch
+    expect(emits).toBe(baseEmits)
+
+    await watcher.close()
+  }, 5000)
+
   it('coalesces multiple events fired in the same tick into ONE flush', async () => {
     let flushCalls = 0
     let receivedAll: string[] = []
