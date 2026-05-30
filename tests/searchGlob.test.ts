@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { searchGlob } from '../src/core/searchGlob'
+import { scanFile, searchGlob } from '../src/core/searchGlob'
 
 let root: string
 
@@ -50,5 +50,19 @@ describe('searchGlob', () => {
   it('drops declarations that nothing ever exports', () => {
     const set = searchGlob({ rootPath: root })
     expect(Array.from(set).find(c => c.name === 'NotExported')).toBeUndefined()
+  })
+})
+
+describe('scanFile (single-file path used by the dev watcher)', () => {
+  it('classifies one file the same way the full scan would', () => {
+    const out = scanFile(join(root, 'PromotedDefault.tsx'))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ name: 'Promoted', type: 'ExportDefault' })
+    // path is slashed
+    expect(out[0].path.endsWith('/PromotedDefault.tsx')).toBe(true)
+  })
+
+  it('returns [] for a non-existent file (no throw)', () => {
+    expect(scanFile(join(root, 'NopeDoesNotExist.tsx'))).toEqual([])
   })
 })

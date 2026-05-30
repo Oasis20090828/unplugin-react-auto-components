@@ -25,6 +25,7 @@ export default defineConfig({
     "unplugin",
     "@babel/parser",
     "@rollup/pluginutils",
+    "chokidar",
     "estree-walker",
     "fast-glob",
     "local-pkg",

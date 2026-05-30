@@ -49,6 +49,7 @@
   "dependencies": {
     "@babel/parser": "^7.24.0",
     "@rollup/pluginutils": "^5.1.0",
+    "chokidar": "^5.0.0",
     "estree-walker": "^3.0.3",
     "fast-glob": "^3.3.2",
     "local-pkg": "^1.2.1",
