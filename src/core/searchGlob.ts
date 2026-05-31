@@ -3,7 +3,8 @@ import { resolve } from "path";
 import fg from "fast-glob";
 import { parse } from "@babel/parser";
 import { walk } from "estree-walker";
-import type { Node } from "@babel/types";
+import type { File, Node } from "@babel/types";
+import type { Node as EstreeNode } from "estree";
 import type {
   Components,
   ComponentsContext,
@@ -30,7 +31,7 @@ export function scanFile(fullPath: string): ComponentsContext[] {
     return [];
   }
 
-  let program: any;
+  let program: File;
   try {
     program = parse(code, {
       sourceType: "module",
@@ -44,7 +45,11 @@ export function scanFile(fullPath: string): ComponentsContext[] {
   const slashedPath = slash(fullPath);
   const components: Components = new Set();
 
-  walk(program as any, {
+  // estree-walker types its argument as ESTree's `Node`. @babel/types is a
+  // superset (it adds JSX/TS nodes) — same shape at runtime, but TS treats
+  // them as nominally distinct trees. One cast at the boundary keeps the
+  // walker callbacks fully typed against @babel/types below.
+  walk(program as unknown as EstreeNode, {
     enter(rawNode) {
       const node = rawNode as unknown as Node;
       let name = "";
@@ -54,7 +59,7 @@ export function scanFile(fullPath: string): ComponentsContext[] {
       if (
         node.type === "VariableDeclaration" &&
         node.declarations[0]?.init?.type === "ArrowFunctionExpression" &&
-        (node.declarations[0].init.body as any)?.type === "JSXElement"
+        node.declarations[0].init.body.type === "JSXElement"
       ) {
         const decl = node.declarations.find(
           (d) => d.type === "VariableDeclarator" && d.id.type === "Identifier",
@@ -71,7 +76,7 @@ export function scanFile(fullPath: string): ComponentsContext[] {
         node.body.body.some(
           (s) =>
             s.type === "ReturnStatement" &&
-            (s.argument as any)?.type === "JSXElement",
+            s.argument?.type === "JSXElement",
         )
       ) {
         name = node.id?.name || "";
@@ -85,10 +90,10 @@ export function scanFile(fullPath: string): ComponentsContext[] {
           node.declaration.body.body.some(
             (s) =>
               s.type === "ReturnStatement" &&
-              (s.argument as any)?.type === "JSXElement",
+              s.argument?.type === "JSXElement",
           )
         ) {
-          name = (node.declaration as any).id?.name || "";
+          name = node.declaration.id?.name || "";
           type = "ExportDefault";
         } else if (node.declaration.type === "Identifier") {
           const exportedName = node.declaration.name;
@@ -110,7 +115,7 @@ export function scanFile(fullPath: string): ComponentsContext[] {
           node.declaration.body.body.some(
             (s) =>
               s.type === "ReturnStatement" &&
-              (s.argument as any)?.type === "JSXElement",
+              s.argument?.type === "JSXElement",
           )
         ) {
           name = node.declaration.id?.name || "";
@@ -129,7 +134,7 @@ export function scanFile(fullPath: string): ComponentsContext[] {
                 body.body.some(
                   (s) =>
                     s.type === "ReturnStatement" &&
-                    (s.argument as any)?.type === "JSXElement",
+                    s.argument?.type === "JSXElement",
                 ));
             if (returnsJsx && decl.id.type === "Identifier") {
               name = decl.id.name;

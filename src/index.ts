@@ -40,32 +40,29 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
 ) => {
   const options = resolveOptions(rawOptions);
 
+  // `dts` is `boolean | Partial<GenerateDtsOptions>`. Narrow once into a
+  // typed shape so the rest of the factory doesn't keep casting.
+  const dtsConfig: Partial<GenerateDtsOptions> | undefined =
+    typeof options.dts === "object" && options.dts ? options.dts : undefined;
+  const dtsEnabled = options.dts === true || !!dtsConfig;
+
   const filter = createFilter(options.include, options.exclude);
   const searchGlobResult = searchGlob({
-    rootPath: (options.dts as any)?.rootPath || options.rootDir,
+    rootPath: dtsConfig?.rootPath || options.rootDir,
     globs: options.globs,
   });
 
-  const dtsBase = {
+  const dtsBase: GenerateDtsOptions = {
     components: searchGlobResult,
-    filename: (options.dts as GenerateDtsOptions)?.filename || "components",
-    rootPath: (options.dts as GenerateDtsOptions)?.rootPath || options.rootDir,
+    filename: dtsConfig?.filename || "components",
+    rootPath: dtsConfig?.rootPath || options.rootDir,
     local: options.local,
     resolvers: options.resolvers,
-  } as GenerateDtsOptions;
-
-  const dtsEnabled =
-    options.dts === true || (typeof options.dts === "object" && !!options.dts);
+  };
 
   const emitDts = () => {
-    if (options.dts === true) {
-      generateDts(dtsBase);
-    } else if (typeof options.dts === "object" && options.dts) {
-      generateDts({
-        ...dtsBase,
-        ...(options.dts as Partial<GenerateDtsOptions>),
-      });
-    }
+    if (!dtsEnabled) return;
+    generateDts(dtsConfig ? { ...dtsBase, ...dtsConfig } : dtsBase);
   };
 
   // Whether a live watcher makes sense at all. If neither local auto-import
@@ -240,17 +237,27 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
 
       // Drain queued events into the live compilation's `fileDependencies` so
       // webpack's own watcher starts tracking these files going forward.
-      compiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: any) => {
-        if (!fileDepQueue.length) return;
-        for (const { path, type } of fileDepQueue) {
-          if (type === "unlink") {
-            compilation.fileDependencies.delete(path);
-          } else {
-            compilation.fileDependencies.add(path);
+      // We don't depend on `webpack` types; declare only the surface we touch.
+      interface WebpackCompilation {
+        fileDependencies: {
+          add(path: string): void;
+          delete(path: string): void;
+        };
+      }
+      compiler.hooks.compilation.tap(
+        PLUGIN_NAME,
+        (compilation: WebpackCompilation) => {
+          if (!fileDepQueue.length) return;
+          for (const { path, type } of fileDepQueue) {
+            if (type === "unlink") {
+              compilation.fileDependencies.delete(path);
+            } else {
+              compilation.fileDependencies.add(path);
+            }
           }
-        }
-        fileDepQueue = [];
-      });
+          fileDepQueue = [];
+        },
+      );
 
       compiler.hooks.shutdown?.tapPromise?.(PLUGIN_NAME, async () => {
         await ownedWatcher?.close();
