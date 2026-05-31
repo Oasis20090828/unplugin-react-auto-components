@@ -1,12 +1,17 @@
 import { createUnplugin, type UnpluginFactory } from "unplugin";
 import MagicString from "magic-string";
+import { relative } from "path";
 import { createFilter } from "@rollup/pluginutils";
 import type { GenerateDtsOptions, Options, TransformOptions } from "./types";
 import { transform } from "./core/transformer";
 import { searchGlob } from "./core/searchGlob";
 import { generateDts } from "./core/generateDts";
 import { setupResolvers } from "./core/manager";
-import { resolveOptions } from "./core/utils";
+import { resolveOptions, slash } from "./core/utils";
+import { createDebug } from "./core/debug";
+
+const dbgInit = createDebug("init");
+const dbgHmr = createDebug("hmr");
 import type { FSWatcher } from "chokidar";
 import {
   attachComponentHandlers,
@@ -38,6 +43,7 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
   const filter = createFilter(options.include, options.exclude);
   const searchGlobResult = searchGlob({
     rootPath: (options.dts as any)?.rootPath || options.rootDir,
+    globs: options.globs,
   });
 
   const dtsBase = {
@@ -66,6 +72,11 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
   // nor dts is enabled, there's nothing to keep in sync.
   const liveEnabled = options.local || dtsEnabled;
 
+  // `consumerId → Set<jsxName>` — populated by the transformer as files go
+  // through it, consumed by the Vite hook to compute surgical HMR targets.
+  // Lives in the factory closure so all hooks share the same instance.
+  const consumerUsage = new Map<string, Set<string>>();
+
   return {
     name: PLUGIN_NAME,
     // Run after React's JSX transform has emitted `jsx(...)`, since the
@@ -76,6 +87,10 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
     // introspection). Do it once here, before any transform or dts emit, then
     // generate the dts (which depends on resolvers being populated).
     async buildStart() {
+      dbgInit(
+        `boot: rootDir=${options.rootDir} resolvers=${options.resolvers.length} ` +
+          `local=${options.local} dts=${dtsEnabled} globs=${JSON.stringify(options.globs)}`,
+      );
       await setupResolvers(options.resolvers);
       emitDts();
     },
@@ -92,6 +107,7 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
         rootDir: options.rootDir,
         resolvers: options.resolvers,
         local: options.local,
+        consumerUsage,
       };
       const result = transform(ctx);
       return {
@@ -114,18 +130,74 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
         // `on('add' | 'change' | 'unlink', cb)` surface we touch.
         attachComponentHandlers(server.watcher as unknown as FSWatcher, {
           rootDir: options.rootDir,
+          globs: options.globs,
           components: searchGlobResult,
           emitDts,
-          onFlush: (events, { changed }) => {
+          onFlush: (events, { changed, affectedNames }) => {
             // `changed === false` means the batch was a no-op (body-only edit
-            // etc.) — no need to reload. Also skip pure-`change` events; Vite's
-            // per-module HMR handles those.
+            // etc.) — no need to reload. Pure-`change` events are left to
+            // Vite's per-module HMR.
             if (!changed) return;
             const structural = events.some(
               (e) => e.type === "add" || e.type === "unlink",
             );
-            if (structural) {
+            if (!structural) return;
+
+            // Surgical HMR: find files we *know* use one of the affected
+            // component names (we recorded this in the transformer). Send a
+            // precise `js-update` for each — React Fast Refresh keeps state.
+            // Fall back to full-reload only if we have no idea who uses them.
+            const consumers = new Set<string>();
+            if (affectedNames.size > 0) {
+              for (const [consumerId, usedNames] of consumerUsage) {
+                for (const n of usedNames) {
+                  if (affectedNames.has(n)) {
+                    consumers.add(consumerId);
+                    break;
+                  }
+                }
+              }
+            }
+
+            // Also drop usage records for any unlinked consumer (no point
+            // tracking dependencies of a file that no longer exists).
+            for (const e of events) {
+              if (e.type === "unlink") consumerUsage.delete(e.path);
+            }
+
+            if (consumers.size === 0) {
+              dbgHmr(`fallback full-reload (no tracked consumers for affected names)`);
               server.ws.send({ type: "full-reload", path: "*" });
+              return;
+            }
+
+            const timestamp = Date.now();
+            const updates = [] as {
+              type: "js-update";
+              path: string;
+              acceptedPath: string;
+              timestamp: number;
+            }[];
+            for (const cid of consumers) {
+              const rel = slash(relative(options.rootDir, cid));
+              if (rel.startsWith("..")) continue; // outside root → can't address
+              const urlPath = `/${rel}`;
+              updates.push({
+                type: "js-update",
+                path: urlPath,
+                acceptedPath: urlPath,
+                timestamp,
+              });
+            }
+            if (updates.length === 0) {
+              dbgHmr(`fallback full-reload (consumers outside rootDir)`);
+              server.ws.send({ type: "full-reload", path: "*" });
+            } else {
+              dbgHmr(
+                `surgical js-update for ${updates.length} consumer(s): ` +
+                  updates.map((u) => u.path).join(", "),
+              );
+              server.ws.send({ type: "update", updates });
             }
           },
         });
@@ -151,6 +223,7 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
 
         ownedWatcher = createComponentWatcher({
           rootDir: options.rootDir,
+          globs: options.globs,
           components: searchGlobResult,
           emitDts,
           onFlush: (events, { changed }) => {

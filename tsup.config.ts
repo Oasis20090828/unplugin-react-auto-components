@@ -1,20 +1,19 @@
 import { defineConfig } from "tsup";
 
+const entry = {
+  index: "src/index.ts",
+  vite: "src/vite.ts",
+  webpack: "src/webpack.ts",
+  rollup: "src/rollup.ts",
+  rspack: "src/rspack.ts",
+  esbuild: "src/esbuild.ts",
+  resolvers: "src/resolvers.ts",
+};
+
 export default defineConfig({
-  entry: {
-    index: "src/index.ts",
-    vite: "src/vite.ts",
-    resolvers: "src/resolvers.ts",
-  },
+  entry,
   format: ["cjs", "esm"],
-  dts: {
-    // 只对 src 目录下的文件生成 d.ts
-    entry: {
-      index: "src/index.ts",
-      vite: "src/vite.ts",
-      resolvers: "src/resolvers.ts",
-    },
-  },
+  dts: { entry },
   splitting: false,
   sourcemap: true,
   clean: true,

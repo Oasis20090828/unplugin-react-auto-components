@@ -53,6 +53,22 @@ export function stringifyImport(info: ImportInfo | string) {
   return `import ${info.default} from '${info.from}'`;
 }
 
+/**
+ * Resolve a user's `dirs` / `globs` settings to a final glob list. `globs`
+ * wins if both are set; otherwise `dirs` is expanded; otherwise the default
+ * "everything under rootDir" pattern is used.
+ */
+function resolveGlobs(options: Options): string[] {
+  if (options.globs && options.globs.length) return options.globs;
+  if (options.dirs && options.dirs.length) {
+    return options.dirs.flatMap((d) => {
+      const trimmed = d.replace(/\/+$/, "");
+      return [`${trimmed}/**/*.tsx`, `${trimmed}/**/*.jsx`];
+    });
+  }
+  return ["**/*.tsx", "**/*.jsx"];
+}
+
 /** Apply defaults to user-supplied plugin options. */
 export function resolveOptions(options: Options = {}): Required<Options> {
   return {
@@ -62,5 +78,7 @@ export function resolveOptions(options: Options = {}): Required<Options> {
     exclude: options.exclude ?? [/[\\/]node_modules[\\/]/, /[\\/]\.git[\\/]/],
     resolvers: options.resolvers || [],
     local: typeof options.local === "boolean" ? options.local : true,
+    dirs: options.dirs ?? [],
+    globs: resolveGlobs(options),
   };
 }

@@ -16,6 +16,7 @@ function ctx(input: string, partial: Partial<TransformOptions> = {}): TransformO
     rootDir: process.cwd(),
     resolvers: partial.resolvers ?? [],
     local: partial.local ?? true,
+    consumerUsage: partial.consumerUsage,
   }
 }
 
@@ -211,5 +212,24 @@ describe('transformer (post-JSX runtime)', () => {
     const o = ctx(src)
     const out = transform(o)
     expect(out).toBe(src)
+  })
+
+  it('records consumer usage and clears stale entries on re-transform', () => {
+    const consumerUsage = new Map<string, Set<string>>()
+    const resolver = tableResolver([
+      { jsxName: 'Foo', name: 'Foo', from: 'lib', type: 'Export' },
+      { jsxName: 'Bar', name: 'Bar', from: 'lib', type: 'Export' },
+    ])
+
+    // First pass: file uses Foo and Bar.
+    const src1 = `import { jsx } from "react/jsx-runtime";\njsx(Foo, {}); jsx(Bar, {})`
+    transform(ctx(src1, { id: '/p/A.tsx', resolvers: [resolver], consumerUsage }))
+    expect(consumerUsage.get('/p/A.tsx')).toEqual(new Set(['Foo', 'Bar']))
+
+    // Second pass: user removed <Bar/>. Re-transform clears stale entries
+    // first, then re-records — leaving only Foo for this consumer.
+    const src2 = `import { jsx } from "react/jsx-runtime";\njsx(Foo, {})`
+    transform(ctx(src2, { id: '/p/A.tsx', resolvers: [resolver], consumerUsage }))
+    expect(consumerUsage.get('/p/A.tsx')).toEqual(new Set(['Foo']))
   })
 })

@@ -53,6 +53,34 @@ describe('searchGlob', () => {
   })
 })
 
+describe('searchGlob honors user-supplied globs', () => {
+  it('only picks up files that match the globs', () => {
+    // Default behavior (no globs): everything is found, including the dangling
+    // declaration's parent dir.
+    const wide = searchGlob({ rootPath: root })
+    const wideNames = new Set([...wide].map((c) => c.name))
+    expect(wideNames.has('Deep')).toBe(true)
+    expect(wideNames.has('NamedFn')).toBe(true)
+
+    // Narrowed to `nested/` only — `NamedFn` at the root falls out.
+    const narrow = searchGlob({ rootPath: root, globs: ['nested/**/*.tsx'] })
+    const narrowNames = new Set([...narrow].map((c) => c.name))
+    expect(narrowNames.has('Deep')).toBe(true)
+    expect(narrowNames.has('NamedFn')).toBe(false)
+    expect(narrowNames.has('DefaultFn')).toBe(false)
+  })
+
+  it('respects negation globs', () => {
+    const out = searchGlob({
+      rootPath: root,
+      globs: ['**/*.tsx', '!nested/**'],
+    })
+    const names = new Set([...out].map((c) => c.name))
+    expect(names.has('Deep')).toBe(false)
+    expect(names.has('NamedFn')).toBe(true)
+  })
+})
+
 describe('scanFile (single-file path used by the dev watcher)', () => {
   it('classifies one file the same way the full scan would', () => {
     const out = scanFile(join(root, 'PromotedDefault.tsx'))

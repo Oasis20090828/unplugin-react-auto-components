@@ -10,6 +10,9 @@ import type {
   SearchGlobOptions,
 } from "../types";
 import { slash } from "./utils";
+import { createDebug } from "./debug";
+
+const dbg = createDebug("scan");
 
 /**
  * AST-scan a single `.tsx` / `.jsx` file and return the React components it
@@ -147,13 +150,14 @@ export function scanFile(fullPath: string): ComponentsContext[] {
 }
 
 /**
- * Walk the project tree under `rootPath`, find every `.tsx` / `.jsx` file,
- * delegate to `scanFile` for each one, and aggregate the results.
+ * Walk the project tree under `rootPath`, find every file matching `globs`
+ * (default: `**\/*.{tsx,jsx}` under the root), delegate to `scanFile` for each,
+ * and aggregate the results.
  */
 export function searchGlob(options: SearchGlobOptions): Components {
-  const { rootPath } = options;
+  const { rootPath, globs = ["**/*.tsx", "**/*.jsx"] } = options;
 
-  const files = fg.sync(["**/*.tsx", "**/*.jsx"], {
+  const files = fg.sync(globs, {
     ignore: ["**/node_modules/**", "**/dist/**", "**/.git/**"],
     cwd: rootPath,
   });
@@ -162,5 +166,6 @@ export function searchGlob(options: SearchGlobOptions): Components {
   for (const file of files) {
     for (const c of scanFile(resolve(rootPath, file))) out.add(c);
   }
+  dbg(`scanned ${files.length} files, found ${out.size} component(s)`);
   return out;
 }

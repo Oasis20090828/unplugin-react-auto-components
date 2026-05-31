@@ -1,8 +1,13 @@
 import chokidar from "chokidar";
 import type { FSWatcher } from "chokidar";
+import { resolve } from "path";
+import { createFilter } from "@rollup/pluginutils";
 import type { Components } from "../types";
 import { scanFile } from "./searchGlob";
 import { slash } from "./utils";
+import { createDebug } from "./debug";
+
+const dbg = createDebug("watch");
 
 export interface FileEvent {
   /** Native filesystem path as emitted by chokidar (platform separators). */
@@ -13,6 +18,16 @@ export interface FileEvent {
 export interface ComponentWatcherOptions {
   /** Project root used as the chokidar root when we create our own watcher. */
   rootDir: string;
+  /**
+   * Glob patterns the user wants tracked. If provided, events outside these
+   * globs are filtered out — both when we own the chokidar instance (we use
+   * them to derive base dirs to watch) and when we piggyback on Vite's
+   * `server.watcher` (we filter incoming events through them).
+   *
+   * Negation patterns (`!**\/*.test.tsx`) are supported. Defaults to
+   * `**\/*.{tsx,jsx}` under `rootDir`.
+   */
+  globs?: string[];
   /**
    * The same `Set<ComponentsContext>` the plugin's factory captured for
    * `transform()` to read. We mutate it in place so subsequent transforms
@@ -31,11 +46,50 @@ export interface ComponentWatcherOptions {
    */
   onFlush?: (
     events: FileEvent[],
-    info: { changed: boolean },
+    info: {
+      changed: boolean;
+      /**
+       * Symmetric difference of component names before and after the batch.
+       * Empty when only existing entries got re-scanned (body-only edits).
+       * Hosts use this to compute the surgical HMR target set.
+       */
+      affectedNames: Set<string>;
+    },
   ) => void;
 }
 
 const isComponentFile = (file: string) => /\.(?:tsx|jsx)$/.test(file);
+
+/**
+ * Build a `(file) => boolean` matcher from a user's globs. Splits positive vs.
+ * negative (`!`-prefixed) patterns into createFilter's two args. Patterns are
+ * resolved against `rootDir` so we can match absolute paths chokidar emits.
+ */
+function buildGlobMatcher(rootDir: string, globs: string[]) {
+  const positives: string[] = [];
+  const negatives: string[] = [];
+  for (const g of globs) {
+    if (g.startsWith("!")) negatives.push(resolve(rootDir, g.slice(1)));
+    else positives.push(resolve(rootDir, g));
+  }
+  return createFilter(positives, negatives);
+}
+
+/**
+ * Extract the static prefix from a glob — what to actually pass to
+ * `chokidar.watch` (chokidar 4+ doesn't accept globs). For example:
+ *   `src/components/**\/*.tsx` → `src/components`
+ *   `src/**\/*.tsx`            → `src`
+ *   `**\/*.tsx`                → `.`
+ * Negation globs return `null` (we don't *positively* watch from them).
+ */
+function globBaseDir(glob: string): string | null {
+  if (glob.startsWith("!")) return null;
+  const idx = glob.search(/[*?{[]/);
+  const head = idx === -1 ? glob : glob.slice(0, idx);
+  const lastSlash = head.lastIndexOf("/");
+  return lastSlash === -1 ? "." : head.slice(0, lastSlash);
+}
 
 /**
  * Attach our component-tracking handlers to an *existing* chokidar instance —
@@ -57,7 +111,8 @@ export function attachComponentHandlers(
   watcher: FSWatcher,
   options: ComponentWatcherOptions,
 ): FSWatcher {
-  const { components, emitDts, onFlush } = options;
+  const { rootDir, globs, components, emitDts, onFlush } = options;
+  const matchGlob = globs && globs.length ? buildGlobMatcher(rootDir, globs) : null;
 
   let queue: FileEvent[] = [];
   let scheduled = false;
@@ -81,7 +136,11 @@ export function attachComponentHandlers(
     // after applying the batch (vs. e.g. a body-only edit that leaves every
     // exported name + type intact). Cheap — O(n) string concat per event tick.
     const beforeFp = new Set<string>();
-    for (const c of components) beforeFp.add(fingerprint(c));
+    const namesBefore = new Set<string>();
+    for (const c of components) {
+      beforeFp.add(fingerprint(c));
+      namesBefore.add(c.name);
+    }
 
     for (const e of events) {
       const target = slash(e.path);
@@ -112,7 +171,8 @@ export function attachComponentHandlers(
       }
     }
 
-    // Did the set actually change?
+    // Did the set actually change? And which component *names* were affected
+    // (symmetric difference) — needed for surgical HMR.
     let changed = components.size !== beforeFp.size;
     if (!changed) {
       for (const c of components) {
@@ -123,8 +183,17 @@ export function attachComponentHandlers(
       }
     }
 
+    const affectedNames = new Set<string>();
+    const namesAfter = new Set<string>();
+    for (const c of components) namesAfter.add(c.name);
+    for (const n of namesBefore) if (!namesAfter.has(n)) affectedNames.add(n);
+    for (const n of namesAfter) if (!namesBefore.has(n)) affectedNames.add(n);
+
     if (changed) emitDts?.();
-    onFlush?.(events, { changed });
+    dbg(
+      `flush: events=${events.length}, changed=${changed}, affected=[${[...affectedNames].join(",")}]`,
+    );
+    onFlush?.(events, { changed, affectedNames });
   };
 
   const schedule = () => {
@@ -135,6 +204,9 @@ export function attachComponentHandlers(
 
   const enqueue = (file: string, type: FileEvent["type"]) => {
     if (!isComponentFile(file)) return;
+    // If the user constrained scope via `globs`, only events on matching paths
+    // count. This lets us safely piggyback on Vite's whole-project watcher.
+    if (matchGlob && !matchGlob(file)) return;
     queue.push({ path: file, type });
     schedule();
   };
@@ -154,7 +226,20 @@ export function attachComponentHandlers(
 export function createComponentWatcher(
   options: ComponentWatcherOptions,
 ): FSWatcher {
-  const watcher = chokidar.watch(options.rootDir, {
+  // Derive what to actually point chokidar at. With user-supplied globs, watch
+  // only the static prefix of each — much less work than watching the whole
+  // `rootDir` and filtering noise.
+  let watchTargets: string | string[] = options.rootDir;
+  if (options.globs && options.globs.length) {
+    const dirs = new Set<string>();
+    for (const g of options.globs) {
+      const base = globBaseDir(g);
+      if (base !== null) dirs.add(resolve(options.rootDir, base));
+    }
+    if (dirs.size) watchTargets = [...dirs];
+  }
+
+  const watcher = chokidar.watch(watchTargets, {
     ignored: [
       /[\\/]node_modules[\\/]/,
       /[\\/]dist[\\/]/,

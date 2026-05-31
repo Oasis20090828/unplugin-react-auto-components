@@ -59,6 +59,20 @@ export interface Options {
   exclude?: FilterPattern;
   /** Third-party component resolvers. */
   resolvers?: Resolvers;
+  /**
+   * Directories to scan for local components. Each is sugar for
+   * `<dir>/**\/*.{tsx,jsx}`. Resolved against `rootDir`. Lets you avoid
+   * picking up things like `pages/` or `tests/` as component sources.
+   *
+   * If both `dirs` and `globs` are set, `globs` wins.
+   */
+  dirs?: string[];
+  /**
+   * Raw glob patterns to scan + watch. Resolved against `rootDir`.
+   * Negation globs (prefixed with `!`) supported.
+   * @example ['src/components/**\/*.tsx', '!**\/*.test.tsx']
+   */
+  globs?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +101,14 @@ export interface TransformOptions {
   rootDir: string;
   resolvers: Resolvers;
   local: boolean;
+  /**
+   * Optional `consumerId → Set<jsxName>` map. When provided, the transformer
+   * records which auto-imported JSX names each file uses. The plugin (in the
+   * dev-server hook) then uses this to send surgical `js-update` HMR events
+   * to only the files that actually use a changed/added/removed component —
+   * instead of a blanket page reload.
+   */
+  consumerUsage?: Map<string, Set<string>>;
 }
 
 export interface GenerateDtsOptions {
@@ -99,4 +121,6 @@ export interface GenerateDtsOptions {
 
 export interface SearchGlobOptions {
   rootPath: string;
+  /** Glob patterns (fast-glob syntax). Defaults to `['**\/*.tsx', '**\/*.jsx']`. */
+  globs?: string[];
 }

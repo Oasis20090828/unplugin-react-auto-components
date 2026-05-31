@@ -27,6 +27,26 @@
       "import": "./dist/vite.mjs",
       "require": "./dist/vite.cjs"
     },
+    "./webpack": {
+      "types": "./dist/webpack.d.ts",
+      "import": "./dist/webpack.mjs",
+      "require": "./dist/webpack.cjs"
+    },
+    "./rollup": {
+      "types": "./dist/rollup.d.ts",
+      "import": "./dist/rollup.mjs",
+      "require": "./dist/rollup.cjs"
+    },
+    "./rspack": {
+      "types": "./dist/rspack.d.ts",
+      "import": "./dist/rspack.mjs",
+      "require": "./dist/rspack.cjs"
+    },
+    "./esbuild": {
+      "types": "./dist/esbuild.d.ts",
+      "import": "./dist/esbuild.mjs",
+      "require": "./dist/esbuild.cjs"
+    },
     "./resolvers": {
       "types": "./dist/resolvers.d.ts",
       "import": "./dist/resolvers.mjs",

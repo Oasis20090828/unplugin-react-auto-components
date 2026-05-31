@@ -2,6 +2,9 @@ import { dirname, relative } from "path";
 import type { ExportType, TransformOptions } from "../types";
 import { isExportComponent, slash, stringifyImport } from "./utils";
 import { resolveComponent } from "./manager";
+import { createDebug } from "./debug";
+
+const dbg = createDebug("transform");
 
 /**
  * Turn an absolute component path into a specifier relative to the file that
@@ -89,7 +92,7 @@ interface ResolvedImport {
 }
 
 export function transform(options: TransformOptions) {
-  const { code, components, resolvers, local, id } = options;
+  const { code, components, resolvers, local, id, consumerUsage } = options;
   const src = code.original;
 
   const matches = Array.from(src.matchAll(callRE)).map((m) => ({
@@ -97,6 +100,11 @@ export function transform(options: TransformOptions) {
     name: m[2],
     original: m[0], // e.g. "jsxs(Button"
   }));
+
+  // Clear stale usage records for this file before we re-record. If the user
+  // just deleted `<Foo/>` from their source, we don't want Foo to stay flagged
+  // as a dependency of this consumer.
+  consumerUsage?.delete(id);
 
   if (!matches.length) return code.toString();
 
@@ -139,6 +147,18 @@ export function transform(options: TransformOptions) {
     const info = resolveInfo(matched.name);
     if (!info) continue;
 
+    // Record that this file uses this component name (powers surgical HMR
+    // in the dev-server hook: when the component changes/appears/disappears,
+    // we only nudge the files that actually consume it).
+    if (consumerUsage) {
+      let used = consumerUsage.get(id);
+      if (!used) {
+        used = new Set();
+        consumerUsage.set(id, used);
+      }
+      used.add(matched.name);
+    }
+
     // Reuse one alias + one import per component, even across jsx/jsxs/_jsx.
     let alias = aliasOf.get(matched.name);
     if (!alias) {
@@ -161,6 +181,10 @@ export function transform(options: TransformOptions) {
   }
 
   if (imports.length) code.prepend(`${imports.join("\n")}\n`);
+
+  if (imports.length) {
+    dbg(`${id}: injected ${imports.length} import(s) for [${[...aliasOf.keys()].join(", ")}]`);
+  }
 
   return code.toString();
 }

@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { generateDts } from '../src/core/generateDts'
 import type { ComponentResolveResult, ComponentResolver, Components } from '../src/types'
 
@@ -69,6 +69,56 @@ describe('generateDts', () => {
     })
     const out = readFileSync(`${root}/components.d.ts`, 'utf-8')
     expect(out).not.toContain('OnlyLocal')
+  })
+
+  it('dedupes: local wins over resolver of the same name + warns', () => {
+    // Same identifier "App" coming from both a local file and a resolver — a
+    // real case (user's App.tsx vs antd v5's App component). Without dedupe
+    // the dts had two `const App: ...` lines.
+    const components: Components = new Set([
+      { name: 'App', path: `${root}/src/App.tsx`, type: 'ExportDefault' },
+    ])
+    const resolvers = [
+      staticResolver([
+        { jsxName: 'App', name: 'App', from: 'antd', type: 'Export' },
+      ]),
+    ]
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    generateDts({
+      components,
+      resolvers,
+      local: true,
+      rootPath: root,
+      filename: 'components',
+    })
+
+    const out = readFileSync(`${root}/components.d.ts`, 'utf-8')
+    const appLines = out.split('\n').filter((l) => /^\s+const App:/.test(l))
+    expect(appLines).toHaveLength(1)
+    // local wins
+    expect(appLines[0]).toContain(`typeof import('./src/App')['default']`)
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0][0]).toMatch(/"App" is both a local component/)
+    warn.mockRestore()
+  })
+
+  it('dedupes: when two resolvers expose the same name, first wins', () => {
+    const resolvers = [
+      staticResolver([{ jsxName: 'Button', name: 'Button', from: 'lib-a', type: 'Export' }]),
+      staticResolver([{ jsxName: 'Button', name: 'Button', from: 'lib-b', type: 'Export' }]),
+    ]
+    generateDts({
+      components: new Set(),
+      resolvers,
+      local: false,
+      rootPath: root,
+      filename: 'components',
+    })
+    const out = readFileSync(`${root}/components.d.ts`, 'utf-8')
+    const buttonLines = out.split('\n').filter((l) => /^\s+const Button:/.test(l))
+    expect(buttonLines).toHaveLength(1)
+    expect(buttonLines[0]).toContain("'lib-a'")
   })
 
   it('silently skips resolvers that do not implement list()', () => {
