@@ -1,0 +1,142 @@
+{
+  "name": "unplugin-react-auto-components",
+  "version": "0.2.4",
+  "description": "On-demand React components auto-import for Vite / Webpack / Rollup",
+  "keywords": [
+    "react",
+    "components",
+    "auto-import",
+    "unplugin",
+    "vite",
+    "webpack",
+    "rollup",
+    "on-demand"
+  ],
+  "license": "MIT",
+  "type": "commonjs",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Oasis20090828/unplugin-react-auto-components.git"
+  },
+  "bugs": "https://github.com/Oasis20090828/unplugin-react-auto-components/issues",
+  "homepage": "https://github.com/Oasis20090828/unplugin-react-auto-components#readme",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./vite": {
+      "import": {
+        "types": "./dist/vite.d.mts",
+        "default": "./dist/vite.mjs"
+      },
+      "require": {
+        "types": "./dist/vite.d.ts",
+        "default": "./dist/vite.cjs"
+      }
+    },
+    "./webpack": {
+      "import": {
+        "types": "./dist/webpack.d.mts",
+        "default": "./dist/webpack.mjs"
+      },
+      "require": {
+        "types": "./dist/webpack.d.ts",
+        "default": "./dist/webpack.cjs"
+      }
+    },
+    "./rollup": {
+      "import": {
+        "types": "./dist/rollup.d.mts",
+        "default": "./dist/rollup.mjs"
+      },
+      "require": {
+        "types": "./dist/rollup.d.ts",
+        "default": "./dist/rollup.cjs"
+      }
+    },
+    "./rspack": {
+      "import": {
+        "types": "./dist/rspack.d.mts",
+        "default": "./dist/rspack.mjs"
+      },
+      "require": {
+        "types": "./dist/rspack.d.ts",
+        "default": "./dist/rspack.cjs"
+      }
+    },
+    "./esbuild": {
+      "import": {
+        "types": "./dist/esbuild.d.mts",
+        "default": "./dist/esbuild.mjs"
+      },
+      "require": {
+        "types": "./dist/esbuild.d.ts",
+        "default": "./dist/esbuild.cjs"
+      }
+    },
+    "./resolvers": {
+      "import": {
+        "types": "./dist/resolvers.d.mts",
+        "default": "./dist/resolvers.mjs"
+      },
+      "require": {
+        "types": "./dist/resolvers.d.ts",
+        "default": "./dist/resolvers.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.24.0",
+    "@rollup/pluginutils": "^5.1.0",
+    "chokidar": "^5.0.0",
+    "estree-walker": "^3.0.3",
+    "fast-glob": "^3.3.2",
+    "local-pkg": "^1.2.1",
+    "magic-string": "^0.30.7",
+    "unplugin": "^1.10.0"
+  },
+  "devDependencies": {
+    "@babel/types": "^7.24.0",
+    "@types/estree": "^1.0.5",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "tsup": "^8.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^1.2.0"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

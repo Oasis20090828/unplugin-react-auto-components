@@ -1,0 +1,69 @@
+name: Publish to npm
+
+# Publishes to npm automatically. Two ways to trigger:
+#   1. Push a version tag:  git tag v0.2.4 && git push origin v0.2.4
+#   2. Run it by hand from the repo's Actions tab (workflow_dispatch).
+#
+# One-time setup: create an npm automation access token
+# (npmjs.com → Access Tokens → Generate → "Automation"), then add it to this
+# repo under Settings → Secrets and variables → Actions as `NPM_TOKEN`.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance (publishing must be from a PUBLIC repo)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm must be set up before setup-node so `cache: pnpm` can find it.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # package.json engines requires Node >= 20.19
+          registry-url: "https://registry.npmjs.org" # writes the auth-token .npmrc pnpm reads
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Guard against publishing a tag whose number doesn't match package.json.
+      - name: Verify tag matches package.json version
+        if: github.event_name == 'push'
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Type-check
+        run: pnpm run type-check
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm run build
+
+      # `--provenance` attaches a signed build attestation (needs the
+      # id-token permission above + a public repo). Remove the flag and the
+      # `id-token: write` line if this repo is private.
+      - name: Publish
+        run: pnpm publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
