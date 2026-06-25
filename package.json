@@ -1,6 +1,6 @@
 {
   "name": "unplugin-react-auto-components",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "On-demand React components auto-import for Vite / Webpack / Rollup",
   "keywords": [
     "react",
@@ -13,7 +13,7 @@
     "on-demand"
   ],
   "license": "MIT",
-  "type": "commonjs",
+  "type": "module",
   "sideEffects": false,
   "repository": {
     "type": "git",
@@ -24,79 +24,37 @@
   "engines": {
     "node": ">=20.19.0"
   },
-  "main": "dist/index.cjs",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.cjs"
-      }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./vite": {
-      "import": {
-        "types": "./dist/vite.d.mts",
-        "default": "./dist/vite.mjs"
-      },
-      "require": {
-        "types": "./dist/vite.d.ts",
-        "default": "./dist/vite.cjs"
-      }
+      "types": "./dist/vite.d.ts",
+      "default": "./dist/vite.js"
     },
     "./webpack": {
-      "import": {
-        "types": "./dist/webpack.d.mts",
-        "default": "./dist/webpack.mjs"
-      },
-      "require": {
-        "types": "./dist/webpack.d.ts",
-        "default": "./dist/webpack.cjs"
-      }
+      "types": "./dist/webpack.d.ts",
+      "default": "./dist/webpack.js"
     },
     "./rollup": {
-      "import": {
-        "types": "./dist/rollup.d.mts",
-        "default": "./dist/rollup.mjs"
-      },
-      "require": {
-        "types": "./dist/rollup.d.ts",
-        "default": "./dist/rollup.cjs"
-      }
+      "types": "./dist/rollup.d.ts",
+      "default": "./dist/rollup.js"
     },
     "./rspack": {
-      "import": {
-        "types": "./dist/rspack.d.mts",
-        "default": "./dist/rspack.mjs"
-      },
-      "require": {
-        "types": "./dist/rspack.d.ts",
-        "default": "./dist/rspack.cjs"
-      }
+      "types": "./dist/rspack.d.ts",
+      "default": "./dist/rspack.js"
     },
     "./esbuild": {
-      "import": {
-        "types": "./dist/esbuild.d.mts",
-        "default": "./dist/esbuild.mjs"
-      },
-      "require": {
-        "types": "./dist/esbuild.d.ts",
-        "default": "./dist/esbuild.cjs"
-      }
+      "types": "./dist/esbuild.d.ts",
+      "default": "./dist/esbuild.js"
     },
     "./resolvers": {
-      "import": {
-        "types": "./dist/resolvers.d.mts",
-        "default": "./dist/resolvers.mjs"
-      },
-      "require": {
-        "types": "./dist/resolvers.d.ts",
-        "default": "./dist/resolvers.cjs"
-      }
+      "types": "./dist/resolvers.d.ts",
+      "default": "./dist/resolvers.js"
     }
   },
   "files": [

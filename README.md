@@ -46,6 +46,10 @@ pnpm add -D unplugin-react-auto-components
 # or npm i -D / yarn add -D
 ```
 
+> **ESM-only**, requires **Node ≥ 20.19**. It still works from a CommonJS
+> bundler config (e.g. a `webpack.config.js` using `require`) — Node ≥ 20.19
+> loads the ESM build through its built-in `require(ESM)`.
+
 ## Quick start
 
 ### Vite
@@ -71,11 +75,11 @@ export default defineConfig({
 ### Webpack
 
 ```js
-// webpack.config.js
-const Components = require("unplugin-react-auto-components/webpack").default;
-const { AntdResolver } = require("unplugin-react-auto-components/resolvers");
+// webpack.config.mjs  (or any config that uses ESM `import`)
+import Components from "unplugin-react-auto-components/webpack";
+import { AntdResolver } from "unplugin-react-auto-components/resolvers";
 
-module.exports = {
+export default {
   plugins: [
     Components({
       dts: true,
@@ -84,6 +88,10 @@ module.exports = {
   ],
 };
 ```
+
+> Prefer a CommonJS `webpack.config.js`? Still works on Node ≥ 20.19:
+> `const Components = require("unplugin-react-auto-components/webpack").default`
+> (Node loads the ESM build via its built-in `require(ESM)`).
 
 ### Rollup / Rspack / esbuild
 

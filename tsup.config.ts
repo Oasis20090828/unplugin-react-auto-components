@@ -12,18 +12,15 @@ const entry = {
 
 export default defineConfig({
   entry,
-  format: ["cjs", "esm"],
-  // Force `.cjs`/`.mjs` so emitted filenames match package.json's `exports`
-  // map. Without this, tsup follows the package's module system — and with no
-  // `"type": "module"` here, CJS gets a bare `.js`. That left `dist/index.cjs`
-  // (and every `*.cjs` the `exports.require`/`main` fields point at) missing,
-  // so any `require()` of this package 404'd.
-  outExtension({ format }) {
-    return { js: format === "cjs" ? ".cjs" : ".mjs" };
-  },
+  // ESM-only. Key deps (estree-walker, local-pkg, chokidar) are ESM-only, so a
+  // CJS build can't `require()` them — it was broken at runtime. The `.js`
+  // output is ESM via the package's `"type": "module"`. CJS consumers (e.g. a
+  // CommonJS webpack.config.js) still load it through Node's `require(esm)`,
+  // supported by default on the Node >= 20.19 this package already requires.
+  format: ["esm"],
   dts: { entry },
-  splitting: false,
-  sourcemap: true,
+  splitting: true,
+  sourcemap: false,
   clean: true,
   treeshake: true,
   minify: false,
