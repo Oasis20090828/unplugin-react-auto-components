@@ -16,6 +16,7 @@ function ctx(input: string, partial: Partial<TransformOptions> = {}): TransformO
     rootDir: process.cwd(),
     resolvers: partial.resolvers ?? [],
     local: partial.local ?? true,
+    localNames: partial.localNames,
     consumerUsage: partial.consumerUsage,
   }
 }
@@ -32,74 +33,44 @@ function tableResolver(items: ComponentResolveResult[]): ComponentResolver {
   }
 }
 
-describe('transformer (post-JSX runtime)', () => {
-  it('matches bare jsxDEV( (Vite dev binding, no underscore)', () => {
-    const src = `import { jsxDEV } from "react/jsx-dev-runtime";\nexport default function App() { return jsxDEV(Button, {}); }`
+describe('transformer (raw JSX)', () => {
+  it('injects a named import for a resolver component, leaving the JSX untouched', () => {
+    const src = `export default function App() { return <Button>ok</Button>; }`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' },
       ])],
     })
     const out = transform(o)
-    expect(out).toContain("import { Button as _unplugin_react_Button_0 } from 'antd'")
-    expect(out).toMatch(/[^_]jsxDEV\(_unplugin_react_Button_0,/)
+    expect(out).toContain("import { Button } from 'antd'")
+    // The JSX itself is NOT rewritten — the bundler compiles it afterwards.
+    expect(out).toContain('<Button>ok</Button>')
   })
 
-  it('rewrites _jsxDEV(Button) and prepends a named import', () => {
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\nexport default function App() { return _jsxDEV(Button, { children: "x" }); }`
-    const o = ctx(src, {
-      resolvers: [tableResolver([
-        { jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' },
-      ])],
-    })
-    const out = transform(o)
-    expect(out).toContain("import { Button as _unplugin_react_Button_0 } from 'antd'")
-    expect(out).toContain('_jsxDEV(_unplugin_react_Button_0,')
-    expect(out).not.toMatch(/_jsxDEV\(Button,/)
-  })
-
-  it('honors prefix mapping: AntButton → import { Button } from "antd"', () => {
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV(AntButton, {})`
+  it('honors prefix mapping: <AntButton/> → import { Button as AntButton }', () => {
+    const src = `const x = <AntButton />`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'AntButton', name: 'Button', from: 'antd', type: 'Export' },
       ])],
     })
     const out = transform(o)
-    expect(out).toContain("import { Button as _unplugin_react_AntButton_0 } from 'antd'")
-    expect(out).toContain('_jsxDEV(_unplugin_react_AntButton_0,')
+    expect(out).toContain("import { Button as AntButton } from 'antd'")
   })
 
-  it('handles prod jsxs() (multiple children) and preserves the fn name', () => {
-    const src = `import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";\n_jsxs(Card, { children: [_jsx(Button, {}), _jsx(Button, {})] })`
-    const o = ctx(src, {
-      resolvers: [tableResolver([
-        { jsxName: 'Card', name: 'Card', from: 'antd', type: 'Export' },
-        { jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' },
-      ])],
-    })
-    const out = transform(o)
-    // jsxs stays jsxs (NOT rewritten to jsx — they pass children differently)
-    expect(out).toMatch(/_jsxs\(_unplugin_react_Card_0,/)
-    expect(out).toMatch(/_jsx\(_unplugin_react_Button_1,/)
-    // Button used twice but imported once
-    expect((out.match(/import \{ Button as/g) || []).length).toBe(1)
-  })
-
-  it('emits default-import when type is ExportDefault', () => {
-    const src = `import { jsx as _jsx } from "react/jsx-runtime";\nconst x = _jsx(Foo, {})`
+  it('emits a default import when type is ExportDefault', () => {
+    const src = `const x = <Foo />`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'Foo', name: 'Foo', from: './Foo', type: 'ExportDefault' },
       ])],
     })
     const out = transform(o)
-    expect(out).toContain("import _unplugin_react_Foo_0 from './Foo'")
-    expect(out).toContain('jsx(_unplugin_react_Foo_0,')
+    expect(out).toContain("import Foo from './Foo'")
   })
 
   it('emits a side-effect style import when present', () => {
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV(DatePicker, {})`
+    const src = `const x = <DatePicker />`
     const o = ctx(src, {
       resolvers: [tableResolver([{
         jsxName: 'DatePicker',
@@ -110,19 +81,34 @@ describe('transformer (post-JSX runtime)', () => {
       }])],
     })
     const out = transform(o)
-    expect(out).toContain("import { DatePicker as _unplugin_react_DatePicker_0 } from 'antd'")
+    expect(out).toContain("import { DatePicker } from 'antd'")
     expect(out).toContain("import 'antd/es/date-picker/style/css'")
   })
 
+  it('handles nested JSX (jsxs path) and imports each component once', () => {
+    const src = `const x = <Card><Button/><Button/></Card>`
+    const o = ctx(src, {
+      resolvers: [tableResolver([
+        { jsxName: 'Card', name: 'Card', from: 'antd', type: 'Export' },
+        { jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' },
+      ])],
+    })
+    const out = transform(o)
+    expect(out).toContain("import { Card } from 'antd'")
+    expect(out).toContain("import { Button } from 'antd'")
+    // Button used twice but imported once.
+    expect((out.match(/import \{ Button \} from 'antd'/g) || []).length).toBe(1)
+  })
+
   it('deduplicates repeated uses of the same component', () => {
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV(Button, {}); _jsxDEV(Button, {});`
+    const src = `const a = <Button/>; const b = <Button/>;`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' },
       ])],
     })
     const out = transform(o)
-    const matches = out.match(/import \{ Button as/g) || []
+    const matches = out.match(/import \{ Button \} from 'antd'/g) || []
     expect(matches.length).toBe(1)
   })
 
@@ -130,26 +116,78 @@ describe('transformer (post-JSX runtime)', () => {
     const local: Components = new Set([
       { name: 'Hello', path: '/repo/src/Hello.tsx', type: 'ExportDefault' },
     ])
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV(Hello, {})`
+    const src = `const x = <Hello />`
     const o = ctx(src, { components: local, id: '/repo/src/App.tsx' })
     const out = transform(o)
-    expect(out).toContain("import _unplugin_react_Hello_0 from './Hello'")
+    expect(out).toContain("import Hello from './Hello'")
+  })
+
+  it('namespaces same-named local files: <Hello/> bare, <ExtraHello/> by dir', () => {
+    // Two files export `Hello`. Lowest path keeps the bare tag; the other is
+    // reachable via a directory-namespaced tag — so BOTH stay importable.
+    const local: Components = new Set([
+      { name: 'Hello', path: '/repo/src/extra/Hello.tsx', type: 'ExportDefault' },
+      { name: 'Hello', path: '/repo/src/Hello.tsx', type: 'ExportDefault' },
+    ])
+    const src = `const x = <div><Hello /><ExtraHello /></div>`
+    const o = ctx(src, { components: local, id: '/repo/src/App.tsx' })
+    const out = transform(o)
+    expect(out).toContain("import Hello from './Hello'")
+    expect(out).toContain("import ExtraHello from './extra/Hello'")
+  })
+
+  it('uses a precomputed localNames map (perf path) instead of rebuilding from components', () => {
+    // `components` is empty, but the precomputed map says <Widget/> is local —
+    // the transformer must trust the passed map (the plugin builds it once and
+    // reuses it across files instead of recomputing per transform).
+    const localNames = new Map<string, { name: string; path: string; type: 'ExportDefault' }>([
+      ['Widget', { name: 'Widget', path: '/repo/src/ui/Widget.tsx', type: 'ExportDefault' }],
+    ])
+    const src = `const x = <Widget/>`
+    const o = ctx(src, {
+      components: new Set() as Components,
+      localNames: localNames as unknown as TransformOptions['localNames'],
+      id: '/repo/src/App.tsx',
+    })
+    const out = transform(o)
+    expect(out).toContain("import Widget from './ui/Widget'")
+  })
+
+  it('prefers a local component over a resolver on a name collision (matches dts "local wins")', () => {
+    // <App/> exists both as a local file and as a resolver export (e.g. antd's
+    // App). generateDts declares the local one, so the transformer must inject
+    // the local import too — otherwise the emitted .d.ts type and the actual
+    // import would point at different modules.
+    const local: Components = new Set([
+      { name: 'App', path: '/repo/src/App.tsx', type: 'ExportDefault' },
+    ])
+    const src = `const x = <App/>`
+    const o = ctx(src, {
+      components: local,
+      id: '/repo/src/pages/Home.tsx',
+      resolvers: [tableResolver([
+        { jsxName: 'App', name: 'App', from: 'antd', type: 'Export' },
+      ])],
+    })
+    const out = transform(o)
+    expect(out).toContain("import App from '../App'")
+    expect(out).not.toContain("from 'antd'")
   })
 
   it('emits a RELATIVE specifier for local components (Vite resolves "/" against root)', () => {
     const local: Components = new Set([
       { name: 'Card', path: '/repo/src/components/Card.tsx', type: 'ExportDefault' },
     ])
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV(Card, {})`
+    const src = `const x = <Card />`
     const o = ctx(src, { components: local, id: '/repo/src/pages/Home.tsx' })
     const out = transform(o)
-    // ../components/Card  — never a leading "/", never a ".tsx" extension
-    expect(out).toContain("import _unplugin_react_Card_0 from '../components/Card'")
+    // ../components/Card — never a leading "/", never a ".tsx" extension
+    expect(out).toContain("import Card from '../components/Card'")
     expect(out).not.toContain("'/repo")
   })
 
   it('first-match-wins between resolvers', () => {
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV(Button, {})`
+    const src = `const x = <Button />`
     const o = ctx(src, {
       resolvers: [
         tableResolver([{ jsxName: 'Button', name: 'Button', from: 'lib-a', type: 'Export' }]),
@@ -163,7 +201,7 @@ describe('transformer (post-JSX runtime)', () => {
 
   it('does NOT shadow a name already imported by the module', () => {
     // The classic footgun: user has their own <App/> but antd also exports App.
-    const src = `import App from "./App";\nimport { jsx } from "react/jsx-runtime";\njsx(App, {})`
+    const src = `import App from "./App";\nconst x = <App/>`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'App', name: 'App', from: 'antd', type: 'Export' },
@@ -171,11 +209,10 @@ describe('transformer (post-JSX runtime)', () => {
     })
     const out = transform(o)
     expect(out).not.toContain("from 'antd'")
-    expect(out).not.toContain('_unplugin_react_App')
   })
 
   it('does NOT re-import a name with an existing named import', () => {
-    const src = `import { Button } from "./ui";\nimport { jsx } from "react/jsx-runtime";\njsx(Button, {})`
+    const src = `import { Button } from "./ui";\nconst x = <Button/>`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' },
@@ -186,7 +223,7 @@ describe('transformer (post-JSX runtime)', () => {
   })
 
   it('does NOT auto-import a locally declared component', () => {
-    const src = `import { jsx } from "react/jsx-runtime";\nfunction Card() { return null }\njsx(Card, {})`
+    const src = `function Card() { return null }\nconst x = <Card/>`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'Card', name: 'Card', from: 'antd', type: 'Export' },
@@ -196,8 +233,8 @@ describe('transformer (post-JSX runtime)', () => {
     expect(out).not.toContain("from 'antd'")
   })
 
-  it('ignores intrinsic HTML tag calls', () => {
-    const src = `import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";\n_jsxDEV("div", { children: "x" })`
+  it('ignores intrinsic (lowercase) HTML tags', () => {
+    const src = `const x = <div>hi</div>`
     const o = ctx(src, {
       resolvers: [tableResolver([
         { jsxName: 'Div', name: 'Div', from: 'whatever', type: 'Export' },
@@ -207,7 +244,20 @@ describe('transformer (post-JSX runtime)', () => {
     expect(out).not.toContain('whatever')
   })
 
-  it('returns input unchanged when there is no JSX runtime', () => {
+  it('does NOT mistake TS generics for components (AST, not regex)', () => {
+    // `<Card>` here is a type argument, not JSX — must not be auto-imported.
+    const src = `const r = useRef<Card>(null); const m = new Map<string, Card>();`
+    const o = ctx(src, {
+      resolvers: [tableResolver([
+        { jsxName: 'Card', name: 'Card', from: 'antd', type: 'Export' },
+      ])],
+    })
+    const out = transform(o)
+    expect(out).not.toContain("from 'antd'")
+    expect(out).toBe(src)
+  })
+
+  it('returns input unchanged when there is no component JSX', () => {
     const src = `export const x = 1`
     const o = ctx(src)
     const out = transform(o)
@@ -222,13 +272,13 @@ describe('transformer (post-JSX runtime)', () => {
     ])
 
     // First pass: file uses Foo and Bar.
-    const src1 = `import { jsx } from "react/jsx-runtime";\njsx(Foo, {}); jsx(Bar, {})`
+    const src1 = `const x = <div><Foo/><Bar/></div>`
     transform(ctx(src1, { id: '/p/A.tsx', resolvers: [resolver], consumerUsage }))
     expect(consumerUsage.get('/p/A.tsx')).toEqual(new Set(['Foo', 'Bar']))
 
     // Second pass: user removed <Bar/>. Re-transform clears stale entries
     // first, then re-records — leaving only Foo for this consumer.
-    const src2 = `import { jsx } from "react/jsx-runtime";\njsx(Foo, {})`
+    const src2 = `const x = <div><Foo/></div>`
     transform(ctx(src2, { id: '/p/A.tsx', resolvers: [resolver], consumerUsage }))
     expect(consumerUsage.get('/p/A.tsx')).toEqual(new Set(['Foo']))
   })

@@ -54,7 +54,7 @@ export interface ComponentWatcherOptions {
        * Hosts use this to compute the surgical HMR target set.
        */
       affectedNames: Set<string>;
-    },
+    }
   ) => void;
 }
 
@@ -109,10 +109,11 @@ function globBaseDir(glob: string): string | null {
  */
 export function attachComponentHandlers(
   watcher: FSWatcher,
-  options: ComponentWatcherOptions,
+  options: ComponentWatcherOptions
 ): FSWatcher {
   const { rootDir, globs, components, emitDts, onFlush } = options;
-  const matchGlob = globs && globs.length ? buildGlobMatcher(rootDir, globs) : null;
+  const matchGlob =
+    globs && globs.length ? buildGlobMatcher(rootDir, globs) : null;
 
   let queue: FileEvent[] = [];
   let scheduled = false;
@@ -162,8 +163,8 @@ export function attachComponentHandlers(
           if (conflict) {
             // eslint-disable-next-line no-console
             console.warn(
-              `[unplugin-react-components] duplicate local component name "${c.name}": ` +
-                `${c.path} clashes with ${conflict.path}. The newer one wins.`,
+              `[unplugin-react-auto-components] duplicate local component name "${c.name}": ` +
+                `${c.path} clashes with ${conflict.path}. The newer one wins.`
             );
           }
           components.add(c);
@@ -191,7 +192,7 @@ export function attachComponentHandlers(
 
     if (changed) emitDts?.();
     dbg(
-      `flush: events=${events.length}, changed=${changed}, affected=[${[...affectedNames].join(",")}]`,
+      `flush: events=${events.length}, changed=${changed}, affected=[${[...affectedNames].join(",")}]`
     );
     onFlush?.(events, { changed, affectedNames });
   };
@@ -224,7 +225,7 @@ export function attachComponentHandlers(
  * `vite build --watch`).
  */
 export function createComponentWatcher(
-  options: ComponentWatcherOptions,
+  options: ComponentWatcherOptions
 ): FSWatcher {
   // Derive what to actually point chokidar at. With user-supplied globs, watch
   // only the static prefix of each — much less work than watching the whole
@@ -240,11 +241,7 @@ export function createComponentWatcher(
   }
 
   const watcher = chokidar.watch(watchTargets, {
-    ignored: [
-      /[\\/]node_modules[\\/]/,
-      /[\\/]dist[\\/]/,
-      /[\\/]\.git[\\/]/,
-    ],
+    ignored: [/[\\/]node_modules[\\/]/, /[\\/]dist[\\/]/, /[\\/]\.git[\\/]/],
     // Initial scan was already done by `searchGlob` in the factory; this
     // watcher only handles deltas.
     ignoreInitial: true,

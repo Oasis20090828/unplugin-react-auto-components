@@ -40,8 +40,14 @@ describe('AntdResolver — dynamic discovery', () => {
 
   it('falls back to the static catalog (with a warning) when not loadable', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // antd isn't installed in this package → discovery fails → static fallback.
-    const r = AntdResolver({ version: 5, dynamic: true })
+    // Point dynamic discovery at a package that can't be loaded → it fails and
+    // falls back to the static antd catalog. (Don't rely on antd being absent:
+    // a workspace example installs it, which would make discovery succeed.)
+    const r = AntdResolver({
+      version: 5,
+      dynamic: true,
+      packageName: 'this-pkg-does-not-exist-xyz',
+    })
     await r.setup!()
     expect(r.resolve('Button')).toBeDefined()
     expect(warn).toHaveBeenCalledOnce()
@@ -210,6 +216,26 @@ describe('AntdResolver — v4', () => {
   })
 })
 
+describe('AntdResolver — arbitrary numeric version (>= 5 threshold)', () => {
+  it('treats version 6 like v5+: CSS-in-JS, v5 component set', () => {
+    const r = AntdResolver({ version: 6 })
+    // v5+ set: FloatButton in, BackTop out
+    expect(r.resolve('FloatButton')).toBeDefined()
+    expect(r.resolve('BackTop')).toBeUndefined()
+    // CSS-in-JS → no style side-effect
+    expect(r.resolve('Button')!.style).toBeUndefined()
+  })
+
+  it('treats a sub-5 version like v4: CSS imports, v4 component set', () => {
+    const r = AntdResolver({ version: 3 })
+    // v4 set: BackTop in, FloatButton out
+    expect(r.resolve('BackTop')).toBeDefined()
+    expect(r.resolve('FloatButton')).toBeUndefined()
+    // v4 default → css style import
+    expect(r.resolve('Button')!.style).toBe('antd/es/button/style/css')
+  })
+})
+
 describe('AntdMobileResolver', () => {
   const r = AntdMobileResolver()
 
@@ -250,47 +276,60 @@ describe('ShadcnResolver', () => {
     rmSync(uiDir, { recursive: true, force: true })
   })
 
-  it('discovers components from the filesystem', () => {
+  it('discovers components from the filesystem (under the default Ui prefix)', () => {
     const r = ShadcnResolver({ componentsRoot: uiDir })
-    expect(r.resolve('Button')?.from).toBe('@/components/ui/button')
-    expect(r.resolve('DropdownMenu')?.from).toBe('@/components/ui/dropdown-menu')
+    // Tags carry the `Ui` prefix; the resolver strips it to find the file and
+    // reports the real export name to import.
+    expect(r.resolve('UiButton')?.from).toBe('@/components/ui/button')
+    expect(r.resolve('UiButton')?.name).toBe('Button')
+    expect(r.resolve('UiDropdownMenu')?.from).toBe('@/components/ui/dropdown-menu')
     // User-authored component in the same folder works too — no hardcoded list to gate it.
-    expect(r.resolve('DataTable')?.from).toBe('@/components/ui/data-table')
+    expect(r.resolve('UiDataTable')?.from).toBe('@/components/ui/data-table')
+    // Bare (unprefixed) names are ignored so they don't shadow native tags.
+    expect(r.resolve('Button')).toBeUndefined()
+  })
+
+  it('prefix: "" opts out, matching bare component names', () => {
+    const r = ShadcnResolver({ componentsRoot: uiDir, prefix: '' })
+    expect(r.resolve('Button')?.from).toBe('@/components/ui/button')
+    expect(r.resolve('Button')?.name).toBe('Button')
   })
 
   it('returns Export type by default', () => {
     const r = ShadcnResolver({ componentsRoot: uiDir })
-    expect(r.resolve('Button')?.type).toBe('Export')
+    expect(r.resolve('UiButton')?.type).toBe('Export')
   })
 
   it('defaultExport: true flips to ExportDefault', () => {
     const r = ShadcnResolver({ componentsRoot: uiDir, defaultExport: true })
-    expect(r.resolve('Button')?.type).toBe('ExportDefault')
+    expect(r.resolve('UiButton')?.type).toBe('ExportDefault')
   })
 
   it('explicit components list overrides filesystem', () => {
     const r = ShadcnResolver({ componentsRoot: uiDir, components: ['CustomThing'] })
-    expect(r.resolve('CustomThing')?.from).toBe('@/components/ui/custom-thing')
-    expect(r.resolve('Button')).toBeUndefined()
+    expect(r.resolve('UiCustomThing')?.from).toBe('@/components/ui/custom-thing')
+    expect(r.resolve('UiButton')).toBeUndefined()
   })
 
   it('componentsDir override changes the emitted import path', () => {
     const r = ShadcnResolver({ componentsRoot: uiDir, componentsDir: '~/ui' })
-    expect(r.resolve('Button')?.from).toBe('~/ui/button')
+    expect(r.resolve('UiButton')?.from).toBe('~/ui/button')
   })
 
   it('warns + returns empty when nothing matches', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = ShadcnResolver({ componentsRoot: '/tmp/does-not-exist-urc-test' })
-    expect(r.resolve('Button')).toBeUndefined()
+    expect(r.resolve('UiButton')).toBeUndefined()
     expect(warn).toHaveBeenCalledOnce()
     warn.mockRestore()
   })
 
-  it('list() yields one entry per discovered file', () => {
+  it('list() yields one Ui-prefixed entry per discovered file', () => {
     const r = ShadcnResolver({ componentsRoot: uiDir })
     const list = r.list!()
     const names = list.map(i => i.jsxName).sort()
-    expect(names).toEqual(['Button', 'DataTable', 'DropdownMenu'])
+    expect(names).toEqual(['UiButton', 'UiDataTable', 'UiDropdownMenu'])
+    // jsxName carries the prefix; name stays the real export.
+    expect(list.find(i => i.jsxName === 'UiButton')?.name).toBe('Button')
   })
 })

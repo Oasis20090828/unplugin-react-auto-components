@@ -101,6 +101,50 @@ describe('generateDts', () => {
     expect(out).not.toContain('OnlyLocal')
   })
 
+  it('never drops a component when a namespaced tag would collide with a real name', () => {
+    // Two Card.tsx (one under ui/) plus a separately-authored UiCard. The ui/
+    // collision would auto-namespace to "UiCard" — which must NOT clobber the
+    // real UiCard. All three stay declared (none silently dropped).
+    const components: Components = new Set([
+      { name: 'Card', path: `${root}/a/Card.tsx`, type: 'ExportDefault' },
+      { name: 'Card', path: `${root}/ui/Card.tsx`, type: 'ExportDefault' },
+      { name: 'UiCard', path: `${root}/z/UiCard.tsx`, type: 'ExportDefault' },
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    generateDts({ components, resolvers: [], local: true, rootPath: root, filename: 'components' })
+    warn.mockRestore()
+
+    const out = readFileSync(`${root}/components.d.ts`, 'utf-8')
+    // Every source file is represented — none overwritten/dropped.
+    expect(out).toContain(`import('./a/Card')`)
+    expect(out).toContain(`import('./ui/Card')`)
+    expect(out).toContain(`import('./z/UiCard')`)
+    const consts = out.split('\n').filter((l) => /^\s+const \w/.test(l))
+    expect(consts).toHaveLength(3)
+  })
+
+  it('only emits valid JS identifiers, even when a disambiguating dir is identifier-illegal', () => {
+    // The lower-path "1/" wins the bare tag; "9/" must be namespaced — and a
+    // naive `9` + `Card` prefix would yield the illegal `const 9Card`.
+    const components: Components = new Set([
+      { name: 'Card', path: `${root}/1/Card.tsx`, type: 'ExportDefault' },
+      { name: 'Card', path: `${root}/9/Card.tsx`, type: 'ExportDefault' },
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    generateDts({ components, resolvers: [], local: true, rootPath: root, filename: 'components' })
+    warn.mockRestore()
+
+    const out = readFileSync(`${root}/components.d.ts`, 'utf-8')
+    const names = out
+      .split('\n')
+      .map((l) => l.match(/^\s+const (\S+):/)?.[1])
+      .filter(Boolean) as string[]
+    expect(names.length).toBe(2)
+    for (const n of names) expect(n).toMatch(/^[A-Za-z_$][\w$]*$/)
+    expect(out).toContain(`import('./1/Card')`)
+    expect(out).toContain(`import('./9/Card')`)
+  })
+
   it('dedupes: local wins over resolver of the same name + warns', () => {
     // Same identifier "App" coming from both a local file and a resolver — a
     // real case (user's App.tsx vs antd v5's App component). Without dedupe
@@ -130,6 +174,42 @@ describe('generateDts', () => {
     expect(appLines[0]).toContain(`typeof import('./src/App')['default']`)
     expect(warn).toHaveBeenCalledOnce()
     expect(warn.mock.calls[0][0]).toMatch(/"App" is both a local component/)
+    warn.mockRestore()
+  })
+
+  it('namespaces same-named local files so both import, deterministically (no rewrite loop)', () => {
+    // Two local components named "App" (e.g. components/App.jsx and a stray
+    // pages/_app.jsx). The `components` Set's iteration order isn't stable across
+    // scans, so without a deterministic assignment the emitted dts flips between
+    // builds — an infinite rewrite → recompile loop in a dev server. Both must
+    // be kept (not dropped): the lower path stays bare, the other is namespaced.
+    const a = { name: 'App', path: `${root}/components/App.jsx`, type: 'ExportDefault' as const }
+    const b = { name: 'App', path: `${root}/pages/_app.jsx`, type: 'ExportDefault' as const }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const forward = generateDts({
+      components: new Set([a, b]),
+      resolvers: [],
+      local: true,
+      rootPath: root,
+      filename: 'components',
+    })
+    const reversed = generateDts({
+      components: new Set([b, a]),
+      resolvers: [],
+      local: true,
+      rootPath: root,
+      filename: 'components',
+    })
+
+    // Same output regardless of Set order — this is what breaks the loop.
+    expect(forward).toBe(reversed)
+    // Lowest path keeps the bare tag; the other is namespaced by its parent dir.
+    // BOTH are present — neither is silently dropped.
+    expect(forward).toContain(`const App: typeof import('./components/App')['default']`)
+    expect(forward).toContain(`const PagesApp: typeof import('./pages/_app')['default']`)
+    expect(warn).toHaveBeenCalled()
+    expect(warn.mock.calls[0][0]).toMatch(/local components named "App"/)
     warn.mockRestore()
   })
 

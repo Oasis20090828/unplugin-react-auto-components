@@ -115,7 +115,7 @@ function getImportName(name: string): string {
 // Version auto-detection
 // ---------------------------------------------------------------------------
 
-function detectMajorSync(packageName: string): 4 | 5 | undefined {
+function detectMajorSync(packageName: string): number | undefined {
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
     const candidate = resolve(dir, "node_modules", packageName, "package.json");
@@ -125,7 +125,7 @@ function detectMajorSync(packageName: string): 4 | 5 | undefined {
           version?: string;
         };
         const major = Number.parseInt((pkg.version || "").split(".")[0]!, 10);
-        if (major === 4 || major === 5) return major;
+        if (Number.isFinite(major)) return major;
       } catch {}
       return undefined;
     }
@@ -142,13 +142,17 @@ function detectMajorSync(packageName: string): 4 | 5 | undefined {
 
 export interface AntdResolverOptions {
   /**
-   * Antd major version. Drives both the matchable component set and the
-   * default `importStyle` (v4: `'css'`, v5: `false`).
+   * Antd major version, as a number. The behavior splits on `>= 5`:
+   *   - `< 5`  (v4 and earlier) → CSS style imports (`importStyle: 'css'`) and
+   *     the v4 component set (includes `BackTop`/`Comment`/`PageHeader`).
+   *   - `>= 5` (v5, v6, …)      → no style import (CSS-in-JS) and the v5+
+   *     component set (includes `App`/`FloatButton`/`Splitter`/…).
    *
-   * If omitted, the resolver reads `node_modules/<packageName>/package.json`
-   * and uses the installed major; falls back to `5`.
+   * Any number works — e.g. `6` is treated like v5+. If omitted, the resolver
+   * reads `node_modules/<packageName>/package.json` and uses the installed
+   * major; falls back to `5`.
    */
-  version?: 4 | 5;
+  version?: number;
   /**
    * Prefix to require on JSX tags. Empty by default — write `<Button />`
    * directly. Set to e.g. `'Ant'` to make it explicit (`<AntButton />`).
@@ -223,16 +227,20 @@ export function AntdResolver(
     const fixed = prefix.charAt(0).toUpperCase() + prefix.slice(1);
     // eslint-disable-next-line no-console
     console.warn(
-      `[unplugin-react-components] AntdResolver: prefix "${prefix}" must start with an uppercase letter. ` +
+      `[unplugin-react-auto-components] AntdResolver: prefix "${prefix}" must start with an uppercase letter. ` +
         `JSX treats <${prefix}Button> as a host element, so it will never be auto-imported. ` +
-        `Use prefix "${fixed}" and write <${fixed}Button>.`,
+        `Use prefix "${fixed}" and write <${fixed}Button>.`
     );
   }
   const lib = cjs ? "lib" : "es";
-  const importStyle = options.importStyle ?? (version === 4 ? "css" : false);
+  // The behavior splits on v5: v5+ is CSS-in-JS (no style import) and uses the
+  // v5+ component set; anything below 5 (v4 and earlier) gets CSS imports and
+  // the v4 set. Comparing by magnitude lets any number — 6, 7, … — Just Work.
+  const v5Plus = version >= 5;
+  const importStyle = options.importStyle ?? (v5Plus ? false : "css");
 
   const isCompat = (name: string) =>
-    version === 4 ? !v5Only.has(name) : !v4Only.has(name);
+    v5Plus ? !v4Only.has(name) : !v5Only.has(name);
 
   const applyExclude = (list: string[]) =>
     options.exclude ? list.filter((n) => !options.exclude!(n)) : list;
@@ -266,8 +274,8 @@ export function AntdResolver(
       } else {
         // eslint-disable-next-line no-console
         console.warn(
-          `[unplugin-react-components] AntdResolver: dynamic discovery failed for "${packageName}" ` +
-            "(not installed or not loadable). Falling back to the static catalog.",
+          `[unplugin-react-auto-components] AntdResolver: dynamic discovery failed for "${packageName}" ` +
+            "(not installed or not loadable). Falling back to the static catalog."
         );
       }
     },

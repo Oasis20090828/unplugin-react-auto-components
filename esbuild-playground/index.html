@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>esbuild · unplugin-react-auto-components</title>
+    <!-- Tailwind v4 → esbuild bundles the PostCSS output to dist/main.css. -->
+    <link rel="stylesheet" href="./dist/main.css" />
+    <!-- react is kept external and loaded from a CDN, so nothing extra to bundle. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+          "react-dom": "https://esm.sh/react-dom@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>

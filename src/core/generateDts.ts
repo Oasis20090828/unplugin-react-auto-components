@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import { dirname, relative, resolve } from "path";
 import type {
   ComponentResolveResult,
@@ -6,10 +13,66 @@ import type {
   GenerateDtsOptions,
 } from "../types";
 import { isExportComponent, slash } from "./utils";
-import { listAllComponents } from "./manager";
+import { listAllComponents, resolveLocalJsxNames } from "./manager";
 import { createDebug } from "./debug";
 
 const dbg = createDebug("dts");
+
+// Monotonic per-process counter for unique temp filenames (see the atomic write
+// in generateDts). Several plugin instances share this module, so it keeps their
+// temp files from clobbering each other.
+let dtsWriteSeq = 0;
+
+/** Synchronous sleep (we're on the build's main thread; keep it tiny). */
+function sleepSync(ms: number) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    // SharedArrayBuffer unavailable in some sandboxes — skip the backoff.
+  }
+}
+
+/**
+ * `renameSync`, but on Windows MoveFileEx can fail with EPERM/EACCES/EBUSY when
+ * another process (a TS server, or a sibling webpack compiler) holds the target
+ * .d.ts open. POSIX rename atomically replaces even with open readers, so this
+ * retry is a no-op there.
+ */
+function renameWithRetry(tmp: string, dest: string) {
+  if (process.platform !== "win32") {
+    renameSync(tmp, dest);
+    return;
+  }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, dest);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (attempt >= 5 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) {
+        throw e;
+      }
+      sleepSync(10 * (attempt + 1));
+    }
+  }
+}
+
+/** Atomic dts write with temp-file cleanup on failure. */
+function atomicWriteDts(outPath: string, dts: string) {
+  const tmp = `${outPath}.${process.pid}.${dtsWriteSeq++}.tmp`;
+  try {
+    writeFileSync(tmp, dts, "utf-8");
+    renameWithRetry(tmp, outPath);
+  } catch (e) {
+    // Don't strand the temp beside the user's source if write/rename failed.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* already gone */
+    }
+    throw e;
+  }
+}
 
 function stringifyLocal(rootPath: string, c: ComponentsContext) {
   // `relative` produces e.g. `src/Hello.tsx` when the dts sits above the
@@ -25,6 +88,36 @@ function stringifyLocal(rootPath: string, c: ComponentsContext) {
 function stringifyResolved(r: ComponentResolveResult) {
   const key = (r.type ?? "Export") === "Export" ? r.name : "default";
   return `typeof import('${r.from}')['${key}']`;
+}
+
+/**
+ * Tell the user when two local files share an export name and were
+ * auto-namespaced — so they know which tag maps to which file.
+ */
+function warnLocalCollisions(
+  components: Iterable<ComponentsContext>,
+  localNames: Map<string, ComponentsContext>,
+) {
+  const byName = new Map<string, ComponentsContext[]>();
+  for (const c of components) {
+    const arr = byName.get(c.name);
+    if (arr) arr.push(c);
+    else byName.set(c.name, [c]);
+  }
+  const jsxOf = new Map<ComponentsContext, string>();
+  for (const [jsx, c] of localNames) jsxOf.set(c, jsx);
+
+  for (const [name, group] of byName) {
+    if (group.length < 2) continue;
+    const labels = group
+      .map((c) => `${c.path} → <${jsxOf.get(c) ?? name}/>`)
+      .join(", ");
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[unplugin-react-auto-components] ${group.length} local components named "${name}"; ` +
+        `auto-namespaced so each stays importable: ${labels}`
+    );
+  }
 }
 
 interface Entry {
@@ -61,13 +154,20 @@ export function generateDts(options: GenerateDtsOptions) {
   const entries = new Map<string, Entry>();
 
   if (local) {
-    components.forEach((c) => {
-      entries.set(c.name, {
+    // Assign each local component a unique JSX tag. Same-named files in
+    // different folders are kept (not dropped): the lowest-path one stays bare,
+    // the rest get a directory-namespaced tag (`<ExtraHelloWorld/>`). The
+    // mapping is deterministic, so the emitted file is stable and a dev server
+    // never enters a rewrite → recompile loop.
+    const localNames = resolveLocalJsxNames(components);
+    for (const [jsxName, c] of localNames) {
+      entries.set(jsxName, {
         body: stringifyLocal(rootPath, c),
         source: c.path,
         isLocal: true,
       });
-    });
+    }
+    warnLocalCollisions(components, localNames);
   }
 
   for (const item of listAllComponents(resolvers)) {
@@ -76,9 +176,9 @@ export function generateDts(options: GenerateDtsOptions) {
       if (existing.isLocal) {
         // eslint-disable-next-line no-console
         console.warn(
-          `[unplugin-react-components] dts: "${item.jsxName}" is both a local component ` +
+          `[unplugin-react-auto-components] dts: "${item.jsxName}" is both a local component ` +
             `(${existing.source}) and a resolver export (${item.from}). The local file wins; ` +
-            `rename one to silence this warning.`,
+            `rename one to silence this warning.`
         );
         continue;
       }
@@ -93,7 +193,7 @@ export function generateDts(options: GenerateDtsOptions) {
   }
 
   const lines: string[] = [];
-  lines.push("/* generated by unplugin-react-components */");
+  lines.push("/* generated by unplugin-react-auto-components */");
   lines.push("/* eslint-disable */");
   lines.push("// @ts-nocheck");
   lines.push("export {}");
@@ -107,7 +207,7 @@ export function generateDts(options: GenerateDtsOptions) {
   // component now touches only its own line. Code-unit comparison (not
   // `localeCompare`) so the output is identical across machines/locales.
   const sorted = [...entries.entries()].sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0,
+    a < b ? -1 : a > b ? 1 : 0
   );
   for (const [name, entry] of sorted) {
     lines.push(`  const ${name}: ${entry.body}`);
@@ -135,7 +235,14 @@ export function generateDts(options: GenerateDtsOptions) {
   }
 
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, dts, "utf-8");
+  // Atomic write. Tools like Next run the plugin in several webpack compilers
+  // (server + client) at once, each emitting this file. A plain writeFileSync
+  // truncates-then-writes, so a concurrent compiler's content-equality read
+  // above can catch a *partial* file, think it changed, and rewrite — an endless
+  // rewrite → recompile loop. Writing to a unique temp file and renaming (atomic
+  // on the same filesystem) means every reader sees a complete file, so the
+  // identical-content check actually fires and the writes settle.
+  atomicWriteDts(outPath, dts);
   dbg(`wrote ${entries.size} component(s) → ${outPath}`);
 
   return dts;

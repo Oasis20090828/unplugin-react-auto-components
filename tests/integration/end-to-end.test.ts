@@ -4,8 +4,8 @@
  * Instead of standing up a real Vite/Webpack build (which would balloon the
  * dev dependencies just for one test), we exercise the same pipeline a bundler
  * would: instantiate the unplugin factory, run `buildStart`, then feed
- * post-JSX-runtime code through `transform` and assert the injected imports,
- * the emitted `components.d.ts`, and the alias replacement.
+ * raw JSX through `transform` and assert the injected imports, the emitted
+ * `components.d.ts`, and that the JSX is left untouched.
  *
  * Catches regressions across: searchGlob → setupResolvers → buildStart → dts
  * write → transform → bound-name guard → resolver precedence.
@@ -81,7 +81,7 @@ afterAll(() => {
 })
 
 describe('end-to-end pipeline', () => {
-  it('boots, scans the fixture, emits dts, transforms post-JSX code', async () => {
+  it('boots, scans the fixture, emits dts, transforms raw JSX', async () => {
     const plugin = realize(
       callFactory({
         rootDir: root,
@@ -103,27 +103,25 @@ describe('end-to-end pipeline', () => {
     expect(dts).toMatch(/const UiButton: typeof import\('fake-ui'\)\['Button'\]/)
     expect(dts).toMatch(/const UiCard: typeof import\('fake-ui'\)\['Card'\]/)
 
-    // Now feed the post-JSX-runtime form of App.tsx (what plugin-react would
-    // emit) through transform. Should inject imports for the local component
-    // AND the resolver component, leaving the user's own bindings alone.
-    const postJsxApp = `import { jsx } from "react/jsx-runtime";
-import alreadyImported from "./somewhere";
+    // Now feed the RAW JSX form of App.tsx through transform. Should inject
+    // imports for the local component AND the resolver components, leaving the
+    // user's own bindings — and the JSX itself — alone.
+    const rawApp = `import alreadyImported from "./somewhere";
 function App() {
-  return jsx(UiButton, { children: [jsx(HelloWorld, {}), jsx(UiCard, {})] });
+  return <UiButton><HelloWorld/><UiCard/></UiButton>;
 }`
-    const out = plugin.transform(postJsxApp, join(root, 'src/App.tsx'))
+    const out = plugin.transform(rawApp, join(root, 'src/App.tsx'))
     expect(out).toBeTruthy()
     const code = typeof out === 'string' ? out : (out as { code: string }).code
 
-    // resolver-driven imports
-    expect(code).toMatch(/import \{ Button as _unplugin_react_UiButton_\d+ \} from 'fake-ui'/)
-    expect(code).toMatch(/import \{ Card as _unplugin_react_UiCard_\d+ \} from 'fake-ui'/)
+    // resolver-driven imports (bound directly to the JSX name)
+    expect(code).toContain("import { Button as UiButton } from 'fake-ui'")
+    expect(code).toContain("import { Card as UiCard } from 'fake-ui'")
     // local-component import via relative path (no leading '/')
-    expect(code).toMatch(/import _unplugin_react_HelloWorld_\d+ from '\.\/components\/HelloWorld'/)
-    // call sites were rewritten
-    expect(code).toMatch(/jsx\(_unplugin_react_UiButton_\d+,/)
-    expect(code).toMatch(/jsx\(_unplugin_react_HelloWorld_\d+,/)
-    expect(code).toMatch(/jsx\(_unplugin_react_UiCard_\d+,/)
+    expect(code).toMatch(/import HelloWorld from '\.\/components\/HelloWorld'/)
+    // the JSX is left untouched — no call-site rewriting
+    expect(code).toContain('<UiButton>')
+    expect(code).toContain('<HelloWorld/>')
     // pre-existing import was not touched and not re-injected
     expect(code).toContain(`import alreadyImported from "./somewhere"`)
   })

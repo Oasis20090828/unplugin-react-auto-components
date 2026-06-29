@@ -37,7 +37,7 @@ export default function App() {
 - 🔧 **Custom resolvers in one line** — `createResolver({ module, prefix })`
 - 📝 **`components.d.ts`** — auto-emitted so TypeScript + your editor stay happy
 - ♻️ **Live in dev** — add a new component file and it shows up without restarting; surgical HMR (no full page reload when possible)
-- 🛠️ **Vite / Webpack / Rollup / Rspack / esbuild**
+- 🛠️ **Vite / Webpack / Rollup / Rspack / esbuild / Rolldown / Farm** — plus **Next.js** (webpack mode, verified)
 
 ## Install
 
@@ -93,9 +93,56 @@ export default {
 > `const Components = require("unplugin-react-auto-components/webpack").default`
 > (Node loads the ESM build via its built-in `require(ESM)`).
 
-### Rollup / Rspack / esbuild
+### Rollup / Rspack / esbuild / Rolldown / Farm
 
-Same idea — `unplugin-react-auto-components/rollup`, `/rspack`, `/esbuild`.
+Same idea — import from `unplugin-react-auto-components/rollup`, `/rspack`,
+`/esbuild`, `/rolldown`, or `/farm`.
+
+### Next.js
+
+Next.js has no built-in component auto-import — use the dedicated `/next` entry
+to wrap your config (the React analog of `unplugin-vue-components/nuxt`):
+
+```js
+// next.config.mjs
+import ReactComponents from "unplugin-react-auto-components/next";
+
+export default ReactComponents({
+  dts: true,
+  // dirs / resolvers / … same options as everywhere else
+})({
+  reactStrictMode: true, // ← your usual Next.js config (optional)
+});
+```
+
+```js
+// next.config.js (CommonJS)
+const ReactComponents = require("unplugin-react-auto-components/next").default;
+module.exports = ReactComponents({ dts: true })({ reactStrictMode: true });
+```
+
+<details><summary>Or wire the webpack plugin by hand</summary>
+
+```js
+// next.config.js
+const Components = require("unplugin-react-auto-components/webpack").default;
+module.exports = {
+  webpack(config) {
+    config.plugins.push(Components({ dts: true }));
+    return config;
+  },
+};
+```
+
+</details>
+
+> ✅ **Verified on Next.js 14 (Pages Router, `next build` / webpack)** — a
+> component used in JSX with no import is auto-injected at build time.
+>
+> ⚠️ **Turbopack is not supported.** `next dev --turbo` and Turbopack builds
+> bypass the webpack pipeline, so the plugin won't run — use the default
+> webpack mode. In the App Router this works for **Client Components**;
+> auto-import inside Server Components is untested.
 
 ## Local components — zero config
 
@@ -133,8 +180,8 @@ All resolvers live in `unplugin-react-auto-components/resolvers`.
 
 ### Ant Design
 
-Handles both v4 (CSS side-effects) and v5 (CSS-in-JS) — auto-detects the
-installed version, override with `version` if needed.
+Handles v4 (CSS side-effects) and v5 / v6 (CSS-in-JS) — auto-detects the
+installed major version, override with `version` if needed.
 
 ```ts
 import { AntdResolver } from "unplugin-react-auto-components/resolvers";
@@ -142,9 +189,9 @@ import { AntdResolver } from "unplugin-react-auto-components/resolvers";
 Components({
   resolvers: [
     AntdResolver({
-      // version: 4 | 5,                  // default: auto-detect, fallback 5
+      // version: 5,                      // any number; default: auto-detect, fallback 5
       // prefix: 'Ant',                   // <AntButton/> → import { Button } from 'antd'
-      // importStyle: 'css' | 'less' | 'css-in-js' | false,  // v4 only; default 'css'
+      // importStyle: 'css' | 'less' | 'css-in-js' | false,  // default: <5 → 'css', >=5 → false
       // cjs: false,                      // use lib/ instead of es/
       // packageName: 'antd',             // fork override
       // dynamic: false,                  // see below
@@ -153,6 +200,16 @@ Components({
   ],
 });
 ```
+
+`version` is a **number**, and behavior splits on `>= 5`:
+
+- **`< 5`** (v4 and earlier) → CSS style imports (`importStyle: 'css'`) and the
+  v4 component set (`BackTop`, `Comment`, `PageHeader`, …).
+- **`>= 5`** (v5, v6, …) → no style import (CSS-in-JS) and the v5+ component set
+  (`App`, `FloatButton`, `Splitter`, …).
+
+So `6`, `7`, … Just Work without a code change. When omitted, the resolver reads
+the installed `antd`'s major version and falls back to `5`.
 
 > ⚠️ **`prefix` must be PascalCase.** JSX treats `<antButton/>` as the HTML
 > tag `"antButton"` (a string), not a component reference, so a lowercase
@@ -188,21 +245,30 @@ Components({ resolvers: [MuiResolver()] }); // <MuiButton/> → import { Button 
 shadcn isn't an npm package — its CLI copies components into your repo. The
 resolver discovers what you actually have by scanning the filesystem.
 
+Tags carry a **`Ui` prefix by default** — write `<UiButton/>`, `<UiCard/>` — so
+shadcn components read distinctly from native HTML tags (`<button>`) and your own
+PascalCase components. The prefix is stripped to find the file and re-applied as
+an import alias: `<UiButton/>` → `import { Button as UiButton } from '@/components/ui/button'`.
+
 ```ts
 import { ShadcnResolver } from "unplugin-react-auto-components/resolvers";
 
 Components({
   resolvers: [
     ShadcnResolver({
+      // prefix: 'Ui',                             // default; set '' for bare <Button/>
       // componentsDir: '@/components/ui',          // import alias (the `from` field)
       // componentsRoot: './src/components/ui',    // real filesystem path to scan
       // components: ['Button', 'Card'],           // explicit list, overrides scan
-      // prefix: '',
       // defaultExport: false,
     }),
   ],
 });
 ```
+
+> **Migration (≥ 0.2.6):** the default `prefix` changed from `''` to `'Ui'`. If
+> you previously used bare shadcn tags (`<Button/>`), either rewrite them as
+> `<UiButton/>` or pass `prefix: ''` to keep the old behavior.
 
 ## Custom resolvers — `createResolver`
 
@@ -327,13 +393,18 @@ function (no string formatting, no allocation per call).
 1. **Scan** — at startup, walk the project (`dirs` / `globs`) and AST-parse every `.tsx`/`.jsx` to find exported React components.
 2. **Setup resolvers** — `await resolver.setup?.()` for each (lets dynamic resolvers like `AntdResolver({dynamic:true})` introspect `node_modules` asynchronously).
 3. **Emit dts** — write `components.d.ts` so TypeScript knows about every component before the first build.
-4. **Transform** — for each `.tsx`/`.jsx` file, regex-match `jsx(X` / `jsxs(X` / `jsxDEV(X` (the React JSX runtime's output) and inject imports for unrecognized capital-cased identifiers.
+4. **Transform** — runs as a `pre` plugin on the **raw JSX**: AST-parse each `.tsx`/`.jsx`, find capital-cased components used in JSX (`<Hello/>`) that aren't already in scope, and prepend the matching `import`. The JSX itself is left untouched — the bundler's own JSX transform then compiles `<Hello/>` → `jsx(Hello)`, now resolving to the injected import.
 5. **Watch** — on dev-server changes, do an incremental single-file rescan and update `components.d.ts` + send precise HMR signals.
 
-The transform is regex-based on the **post-JSX-runtime** output (so it runs
-as a `post` plugin, after `@vitejs/plugin-react`/babel's JSX transform). This
-avoids re-parsing JSX and means the plugin's hot path is microseconds, not
-milliseconds.
+Working on the **raw JSX** (rather than the post-transform `jsx(...)` output) is
+what lets the plugin run in every bundler — including ones whose JSX transform
+is built in and runs _after_ plugins (esbuild, Farm), where there is no
+`jsx(...)` for a post pass to match. A cheap `<[A-Z]` pre-check keeps files
+without component JSX off the parse hot path.
+
+> **Rollup / Rolldown ordering:** these run plugins in array order and ignore
+> unplugin's `enforce`, so place this plugin **before** your JSX-transform
+> plugin (e.g. `@rollup/plugin-babel`) — it must see the raw JSX first.
 
 ## License
 

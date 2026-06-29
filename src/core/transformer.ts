@@ -1,7 +1,11 @@
 import { dirname, relative } from "path";
+import { parse } from "@babel/parser";
+import { walk } from "estree-walker";
+import type { File, Node } from "@babel/types";
+import type { Node as EstreeNode } from "estree";
 import type { ExportType, TransformOptions } from "../types";
 import { isExportComponent, slash, stringifyImport } from "./utils";
-import { resolveComponent } from "./manager";
+import { resolveComponent, resolveLocalJsxNames } from "./manager";
 import { createDebug } from "./debug";
 
 const dbg = createDebug("transform");
@@ -21,21 +25,20 @@ function toRelativeImport(fromId: string, targetPath: string): string {
   return rel;
 }
 
-// Match a post-JSX-runtime call site for a capital-letter component. We capture
-// the runtime fn name (group 1) and the component identifier (group 2).
-//
-// The fn is one of jsx / jsxs / jsxDEV, with an OPTIONAL leading underscore —
-// both spellings occur in the wild:
-//   jsxDEV(Button, ...)    ← Vite dev (binding named `jsxDEV`)
-//   _jsxDEV(Button, ...)   ← Babel automatic dev runtime
-//   jsx(Button) / jsxs(..) ← prod react/jsx-runtime (single / static children)
-//   _jsx(Button) / _jsxs   ← Babel automatic prod runtime
-//
-// `jsxDEV` is listed before `jsxs`/`jsx` so the longest name wins. The
-// `(?<![\w.])` lookbehind avoids matching inside another identifier
-// (`foo_jsx(`) or a member access (`React.jsx(`). Requiring `[A-Z]` for the
-// component skips intrinsic tags (`jsx("div")`) and lowercase locals.
-const callRE = /(?<![\w.])(_?(?:jsxDEV|jsxs|jsx))\(([A-Z]\w*)/g;
+/**
+ * The capital-cased *root* identifier of a JSX element name, or `null` for
+ * intrinsic (lowercase) tags, fragments, and namespaced names:
+ *   <Button/>      → "Button"
+ *   <Ant.Button/>  → "Ant"   (the base — same identifier the old jsx(Ant.Button) path keyed on)
+ *   <div/>         → null
+ */
+function jsxRootName(name: Node): string | null {
+  if (name.type === "JSXIdentifier")
+    return /^[A-Z]/.test(name.name) ? name.name : null;
+  if (name.type === "JSXMemberExpression")
+    return jsxRootName(name.object as Node);
+  return null;
+}
 
 /**
  * Collect every identifier the module already binds — imports and top-level
@@ -91,31 +94,91 @@ interface ResolvedImport {
   style?: string;
 }
 
+/**
+ * Detect auto-importable components used in a file's **raw JSX** (`<Hello/>`)
+ * and prepend the matching `import` statements — then leave the JSX untouched
+ * so the bundler's own JSX transform compiles `<Hello/>` → `jsx(Hello)`, now
+ * resolving to the injected import.
+ *
+ * Working on the raw source (rather than the post-transform `jsx(...)` output)
+ * is why the plugin runs `enforce: 'pre'` and works in every bundler — even
+ * ones whose JSX transform is built in and runs *after* plugins (esbuild, Farm),
+ * where there is no `jsx(...)` for a post pass to match.
+ */
 export function transform(options: TransformOptions) {
   const { code, components, resolvers, local, id, consumerUsage } = options;
   const src = code.original;
-
-  const matches = Array.from(src.matchAll(callRE)).map((m) => ({
-    fn: m[1],
-    name: m[2],
-    original: m[0], // e.g. "jsxs(Button"
-  }));
 
   // Clear stale usage records for this file before we re-record. If the user
   // just deleted `<Foo/>` from their source, we don't want Foo to stay flagged
   // as a dependency of this consumer.
   consumerUsage?.delete(id);
 
-  if (!matches.length) return code.toString();
+  // Cheap gate: no capital-cased tag-looking token → no component JSX possible,
+  // so skip the parse entirely (keeps non-component files off the hot path).
+  if (!/<[A-Z]/.test(src)) return code.toString();
+
+  let program: File;
+  try {
+    program = parse(src, {
+      sourceType: "module",
+      plugins: ["typescript", "jsx"],
+      errorRecovery: true,
+    });
+  } catch {
+    // Unparseable input — leave it for the bundler to report. Never throw.
+    return code.toString();
+  }
+
+  // Capital-cased component names actually used in JSX, in first-seen order.
+  // Parsing (not a regex) is what keeps TS generics like `useRef<HTMLDivElement>()`
+  // or `Map<string, Foo>` from being mistaken for components.
+  const used = new Set<string>();
+  walk(program as unknown as EstreeNode, {
+    enter(rawNode) {
+      const node = rawNode as unknown as Node;
+      if (node.type === "JSXOpeningElement") {
+        const name = jsxRootName(node.name as Node);
+        if (name) used.add(name);
+      }
+    },
+  });
+
+  if (!used.size) return code.toString();
 
   const boundNames = collectBoundNames(src);
-  const aliasOf = new Map<string, string>(); // component name -> local alias
-  const processedTokens = new Set<string>(); // exact "fn(Name" tokens handled
   const imports: string[] = [];
-  let index = 0;
+  const injected: string[] = [];
+
+  // Map of JSX tag → local component, with same-named files disambiguated by
+  // directory namespace (`<ExtraHelloWorld/>`). The plugin precomputes this once
+  // per component-set change and passes it in; fall back to building it here for
+  // tests / direct callers. The same deterministic mapping backs generateDts, so
+  // the injected import always matches the emitted declaration.
+  const localNames =
+    options.localNames !== undefined
+      ? options.localNames
+      : local
+        ? resolveLocalJsxNames(components)
+        : null;
 
   const resolveInfo = (name: string): ResolvedImport | null => {
-    // 1. User-supplied resolvers win.
+    // 1. Local AST-scanned components win, looked up by the (possibly
+    // namespaced) JSX tag. `found.name` is the real export — when it differs
+    // from the tag, the injection below aliases the import. Local-first matches
+    // generateDts's dedupe ("the local file wins" on a name collision), so the
+    // injected import and the emitted .d.ts always agree on where a tag resolves.
+    if (localNames) {
+      const found = localNames.get(name);
+      if (found) {
+        return {
+          importName: found.name,
+          type: found.type as ExportType,
+          from: toRelativeImport(id, found.path),
+        };
+      }
+    }
+    // 2. Fall back to user-supplied resolvers.
     const hit = resolveComponent(resolvers, name);
     if (hit) {
       return {
@@ -125,65 +188,49 @@ export function transform(options: TransformOptions) {
         style: hit.style,
       };
     }
-    // 2. Fall back to AST-scanned local components.
-    if (!local) return null;
-    const found = Array.from(components).find((c) => c.name === name);
-    if (!found) return null;
-    return {
-      importName: found.name,
-      type: found.type as ExportType,
-      from: toRelativeImport(id, found.path),
-    };
+    return null;
   };
 
-  for (const matched of matches) {
-    // A given "fn(Name" token only needs one replaceAll pass.
-    if (processedTokens.has(matched.original)) continue;
-    processedTokens.add(matched.original);
-
+  for (const name of used) {
     // Never shadow a name the module already binds (imported or declared).
-    if (boundNames.has(matched.name)) continue;
+    if (boundNames.has(name)) continue;
 
-    const info = resolveInfo(matched.name);
+    const info = resolveInfo(name);
     if (!info) continue;
 
     // Record that this file uses this component name (powers surgical HMR
     // in the dev-server hook: when the component changes/appears/disappears,
     // we only nudge the files that actually consume it).
     if (consumerUsage) {
-      let used = consumerUsage.get(id);
-      if (!used) {
-        used = new Set();
-        consumerUsage.set(id, used);
+      let usedSet = consumerUsage.get(id);
+      if (!usedSet) {
+        usedSet = new Set();
+        consumerUsage.set(id, usedSet);
       }
-      used.add(matched.name);
+      usedSet.add(name);
     }
 
-    // Reuse one alias + one import per component, even across jsx/jsxs/_jsx.
-    let alias = aliasOf.get(matched.name);
-    if (!alias) {
-      alias = `_unplugin_react_${matched.name}_${index}`;
-      index++;
-      aliasOf.set(matched.name, alias);
-
-      if (isExportComponent(info.type))
-        imports.push(
-          stringifyImport({ name: info.importName, as: alias, from: info.from }),
-        );
-      else imports.push(stringifyImport({ default: alias, from: info.from }));
-
-      if (info.style) imports.push(stringifyImport(info.style));
+    // Bind the JSX name directly — no call-site rewriting needed, because the
+    // bundler turns `<Name/>` into `jsx(Name)` which then resolves to this import.
+    // `<AntButton/>` → import { Button as AntButton } from 'antd'
+    // `<HelloWorld/>` → import HelloWorld from './HelloWorld'
+    if (isExportComponent(info.type)) {
+      imports.push(
+        info.importName === name
+          ? stringifyImport({ name, from: info.from })
+          : stringifyImport({ name: info.importName, as: name, from: info.from }),
+      );
+    } else {
+      imports.push(stringifyImport({ default: name, from: info.from }));
     }
 
-    // Preserve the original runtime fn (jsx vs jsxs matters — they differ in
-    // how children are passed), only swap the component identifier.
-    code.replaceAll(matched.original, `${matched.fn}(${alias}`);
+    if (info.style) imports.push(stringifyImport(info.style));
+    injected.push(name);
   }
 
-  if (imports.length) code.prepend(`${imports.join("\n")}\n`);
-
   if (imports.length) {
-    dbg(`${id}: injected ${imports.length} import(s) for [${[...aliasOf.keys()].join(", ")}]`);
+    code.prepend(`${imports.join("\n")}\n`);
+    dbg(`${id}: injected ${imports.length} import(s) for [${injected.join(", ")}]`);
   }
 
   return code.toString();

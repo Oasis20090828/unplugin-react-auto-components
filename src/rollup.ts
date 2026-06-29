@@ -6,7 +6,7 @@ import { unpluginFactory } from "./index";
  *
  * @example
  * // rollup.config.js
- * import Components from 'unplugin-react-components/rollup'
+ * import Components from 'unplugin-react-auto-components/rollup'
  * export default { plugins: [Components({ resolvers: [...] })] }
  */
 export default createRollupPlugin(unpluginFactory);

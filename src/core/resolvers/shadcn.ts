@@ -25,10 +25,15 @@ export interface ShadcnResolverOptions {
    */
   components?: string[];
   /**
-   * Prefix to require on JSX tags. shadcn doesn't ship with one, so leaving
-   * this empty is normal.
+   * Prefix required on JSX tags. Defaults to `'Ui'` so shadcn components read
+   * as `<UiButton/>`, `<UiCard/>` — visually distinct from native lowercase
+   * tags (`<button>`) and from your own PascalCase components. The prefix is
+   * stripped to find the real export, then re-applied as an import alias:
+   *   `<UiButton/>` → `import { Button as UiButton } from '@/components/ui/button'`
    *
-   * @default ''
+   * Set to `''` to use bare names (`<Button/>`) instead.
+   *
+   * @default 'Ui'
    */
   prefix?: string;
   /**
@@ -64,6 +69,10 @@ function discoverFromDisk(rootAbs: string): string[] {
  * into your repo. We therefore can't introspect a module; the source of
  * truth is your filesystem.
  *
+ * By default tags carry a `Ui` prefix (`<UiButton/>`) so on-disk components
+ * never collide with native HTML tags or your own components; the prefix is
+ * stripped to map back to the file (`button.tsx`) and re-applied as an alias.
+ *
  * Discovery precedence:
  *   1. `options.components` if provided.
  *   2. Scan `options.componentsRoot` (default `./src/components/ui`).
@@ -79,7 +88,7 @@ export function ShadcnResolver(
   const {
     componentsDir = "@/components/ui",
     componentsRoot = "./src/components/ui",
-    prefix = "",
+    prefix = "Ui",
     defaultExport = false,
     exclude,
   } = options;
@@ -93,7 +102,7 @@ export function ShadcnResolver(
     if (!names.length) {
       // eslint-disable-next-line no-console
       console.warn(
-        `[unplugin-react-components] ShadcnResolver: nothing found at ${rootAbs}. ` +
+        `[unplugin-react-auto-components] ShadcnResolver: nothing found at ${rootAbs}. ` +
           "Run `npx shadcn add <component>` first, set `componentsRoot`, or pass `components: [...]` explicitly."
       );
     }

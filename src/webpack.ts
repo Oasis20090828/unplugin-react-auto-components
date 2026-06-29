@@ -6,7 +6,7 @@ import { unpluginFactory } from "./index";
  *
  * @example
  * // webpack.config.js
- * const Components = require('unplugin-react-components/webpack').default
+ * const Components = require('unplugin-react-auto-components/webpack').default
  * module.exports = { plugins: [Components({ resolvers: [...] })] }
  */
 export default createWebpackPlugin(unpluginFactory);

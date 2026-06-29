@@ -34,7 +34,7 @@ export interface CreateResolverOptions {
  * export const MuiResolver = (o?) => createResolver({ module: '@mui/material', prefix: 'Mui' })
  */
 export function createResolver(
-  factoryOptions: CreateResolverOptions,
+  factoryOptions: CreateResolverOptions
 ): ComponentResolver {
   const { module: moduleName, prefix = "", exclude, style } = factoryOptions;
 
@@ -60,8 +60,8 @@ export function createResolver(
       if (!discovered) {
         // eslint-disable-next-line no-console
         console.warn(
-          `[unplugin-react-components] createResolver: could not load "${moduleName}". ` +
-            "Is it installed? This resolver will match nothing.",
+          `[unplugin-react-auto-components] createResolver: could not load "${moduleName}". ` +
+            "Is it installed? This resolver will match nothing."
         );
         names = [];
         return;

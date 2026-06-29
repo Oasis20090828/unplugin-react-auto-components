@@ -32,6 +32,16 @@ export function slash(str: string) {
 }
 
 /**
+ * PascalCase a single path segment for use as a namespace prefix.
+ * `extra` → `Extra`, `ui-kit` → `UiKit`, `my_widgets` → `MyWidgets`.
+ */
+export function pascalCase(str: string) {
+  return str
+    .replace(/(^|[-_\s]+)([a-zA-Z0-9])/g, (_, __, c) => String(c).toUpperCase())
+    .replace(/[-_\s]+/g, "");
+}
+
+/**
  * Convert PascalCase / camelCase / snake_case to kebab-case.
  * `DatePicker` → `date-picker`, `TreeSelect` → `tree-select`.
  *

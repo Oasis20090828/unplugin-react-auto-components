@@ -6,7 +6,7 @@ import { unpluginFactory } from "./index";
  *
  * @example
  * // rspack.config.js
- * const Components = require('unplugin-react-components/rspack').default
+ * const Components = require('unplugin-react-auto-components/rspack').default
  * module.exports = { plugins: [Components({ resolvers: [...] })] }
  */
 export default createRspackPlugin(unpluginFactory);

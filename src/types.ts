@@ -102,6 +102,15 @@ export interface TransformOptions {
   resolvers: Resolvers;
   local: boolean;
   /**
+   * Optional precomputed `jsxTag → local component` map (from
+   * `resolveLocalJsxNames`). The plugin builds this once per component-set
+   * change and reuses it across every file's transform, instead of paying the
+   * O(N log N) rebuild per file. When omitted, the transformer computes it from
+   * `components` itself (used by tests / direct callers). `null` means local
+   * discovery is off.
+   */
+  localNames?: Map<string, ComponentsContext> | null;
+  /**
    * Optional `consumerId → Set<jsxName>` map. When provided, the transformer
    * records which auto-imported JSX names each file uses. The plugin (in the
    * dev-server hook) then uses this to send surgical `js-update` HMR events

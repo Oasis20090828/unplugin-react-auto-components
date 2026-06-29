@@ -6,7 +6,7 @@ import type { GenerateDtsOptions, Options, TransformOptions } from "./types";
 import { transform } from "./core/transformer";
 import { searchGlob } from "./core/searchGlob";
 import { generateDts } from "./core/generateDts";
-import { setupResolvers } from "./core/manager";
+import { resolveLocalJsxNames, setupResolvers } from "./core/manager";
 import { detectDtsRoot, resolveOptions, slash } from "./core/utils";
 import { createDebug } from "./core/debug";
 
@@ -81,11 +81,33 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
   // Lives in the factory closure so all hooks share the same instance.
   const consumerUsage = new Map<string, Set<string>>();
 
+  // Memoized `jsxTag → local component` map shared by every file's transform.
+  // Rebuilding it per file is O(N log N) wasted work; build once and invalidate
+  // only when the component set actually changes (the watcher's onFlush calls
+  // `invalidateLocalNames` on a structural add/unlink/rename). `undefined` means
+  // "needs (re)build"; `null` means local discovery is off.
+  let localNamesCache: ReturnType<typeof resolveLocalJsxNames> | null | undefined;
+  const getLocalNames = () => {
+    if (localNamesCache === undefined) {
+      localNamesCache = options.local
+        ? resolveLocalJsxNames(searchGlobResult)
+        : null;
+    }
+    return localNamesCache;
+  };
+  const invalidateLocalNames = () => {
+    localNamesCache = undefined;
+  };
+
   return {
     name: PLUGIN_NAME,
-    // Run after React's JSX transform has emitted `jsx(...)`, since the
-    // transformer rewrites those call sites.
-    enforce: "post",
+    // Run BEFORE the JSX transform: the transformer detects components in the
+    // raw JSX (`<Hello/>`) and injects imports, then lets the bundler's own JSX
+    // transform compile `<Hello/>` → `jsx(Hello)`. Running `pre` (rather than
+    // matching post-transform `jsx()`) is what lets the plugin work even in
+    // bundlers whose JSX transform is built in and runs after plugins (esbuild,
+    // Farm), where no `jsx()` exists for a post pass to match.
+    enforce: "pre",
 
     // Resolvers may need async initialization (e.g. dynamic package
     // introspection). Do it once here, before any transform or dts emit, then
@@ -111,6 +133,7 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
         rootDir: options.rootDir,
         resolvers: options.resolvers,
         local: options.local,
+        localNames: getLocalNames(),
         consumerUsage,
       };
       const result = transform(ctx);
@@ -142,6 +165,8 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
             // etc.) — no need to reload. Pure-`change` events are left to
             // Vite's per-module HMR.
             if (!changed) return;
+            // The component set changed → the cached jsxTag map is stale.
+            invalidateLocalNames();
             const structural = events.some(
               (e) => e.type === "add" || e.type === "unlink"
             );
@@ -238,6 +263,8 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
             // fires at most once per tick. We stash events for the next
             // compilation hook and ask webpack to rebuild.
             if (!changed) return;
+            // The component set changed → the cached jsxTag map is stale.
+            invalidateLocalNames();
             fileDepQueue.push(...events);
             compiler.watching?.invalidate();
           },

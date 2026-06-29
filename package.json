@@ -1,6 +1,6 @@
 {
   "name": "unplugin-react-auto-components",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "On-demand React components auto-import for Vite / Webpack / Rollup",
   "keywords": [
     "react",
@@ -52,9 +52,25 @@
       "types": "./dist/esbuild.d.ts",
       "default": "./dist/esbuild.js"
     },
+    "./rolldown": {
+      "types": "./dist/rolldown.d.ts",
+      "default": "./dist/rolldown.js"
+    },
+    "./farm": {
+      "types": "./dist/farm.d.ts",
+      "default": "./dist/farm.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "default": "./dist/next.js"
+    },
     "./resolvers": {
       "types": "./dist/resolvers.d.ts",
       "default": "./dist/resolvers.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
     }
   },
   "files": [

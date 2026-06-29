@@ -1,0 +1,30 @@
+{
+  "name": "rollup-playground",
+  "private": true,
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c --watch & node ../serve.mjs"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.24.0",
+    "@rollup/plugin-alias": "^5.1.1",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^28.0.0",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/plugin-replace": "^6.0.0",
+    "@tailwindcss/postcss": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "rollup": "^4.21.0",
+    "rollup-plugin-postcss": "^4.0.2",
+    "tailwindcss": "^4.0.0",
+    "unplugin-react-auto-components": "workspace:*"
+  },
+  "dependencies": {
+    "antd": "6.4.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.6.0"
+  }
+}

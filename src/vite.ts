@@ -7,7 +7,7 @@ import { unpluginFactory } from "./index";
  *
  * @example
  * // vite.config.ts
- * import Components from 'unplugin-react-components/vite'
+ * import Components from 'unplugin-react-auto-components/vite'
  * export default { plugins: [Components({ resolvers: [...] })] }
  */
 export default createVitePlugin(unpluginFactory);

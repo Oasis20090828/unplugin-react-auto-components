@@ -7,7 +7,11 @@ const entry = {
   rollup: "src/rollup.ts",
   rspack: "src/rspack.ts",
   esbuild: "src/esbuild.ts",
+  rolldown: "src/rolldown.ts",
+  farm: "src/farm.ts",
+  next: "src/next.ts",
   resolvers: "src/resolvers.ts",
+  types: "src/types.ts",
 };
 
 export default defineConfig({

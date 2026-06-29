@@ -6,7 +6,7 @@ import { unpluginFactory } from "./index";
  *
  * @example
  * import { build } from 'esbuild'
- * import Components from 'unplugin-react-components/esbuild'
+ * import Components from 'unplugin-react-auto-components/esbuild'
  * await build({ plugins: [Components({ resolvers: [...] })] })
  */
 export default createEsbuildPlugin(unpluginFactory);
