@@ -6,7 +6,7 @@ name: Publish to npm
 #
 # One-time setup: create an npm automation access token
 # (npmjs.com → Access Tokens → Generate → "Automation"), then add it to this
-# repo under Settings → Secrets and variables → Actions as `NPM_TOKEN`.
+# repo under Settings → Secrets and variables → Actions as `NODE_AUTH_TOKEN`.
 on:
   push:
     tags:
@@ -22,16 +22,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # pnpm must be set up before setup-node so `cache: pnpm` can find it.
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22 # package.json engines requires Node >= 20.19
           registry-url: "https://registry.npmjs.org" # writes the auth-token .npmrc pnpm reads
@@ -64,6 +64,15 @@ jobs:
       # id-token permission above + a public repo). Remove the flag and the
       # `id-token: write` line if this repo is private.
       - name: Publish
-        run: pnpm publish --access public --no-git-checks --provenance
+        # `setup-node` writes an .npmrc keyed on ${NODE_AUTH_TOKEN}, but pnpm
+        # doesn't reliably read it — which surfaces as `ENEEDAUTH` here. Write the
+        # token to the project .npmrc (pnpm always reads cwd) so it authenticates.
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NODE_AUTH_TOKEN secret is empty or unset. Create an npm 'Automation' token and add it as the NODE_AUTH_TOKEN repo secret (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" >> .npmrc
+          pnpm publish --access public --no-git-checks --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
