@@ -1,8 +1,9 @@
 # unplugin-react-auto-components
 
 > Auto-import React components on-demand. Reads your JSX, figures out which
-> components you used, and injects the imports for you. Works in Vite,
-> Webpack, Rollup, Rspack, and esbuild via [unplugin](https://github.com/unjs/unplugin).
+> components you used, and injects the imports for you. Works in Vite, Webpack,
+> Rollup, Rspack, esbuild, Rolldown, and Farm — plus Next.js — via
+> [unplugin](https://github.com/unjs/unplugin).
 > Inspired by [unplugin-vue-components](https://github.com/unplugin/unplugin-vue-components).
 
 ```tsx
@@ -52,7 +53,24 @@ pnpm add -D unplugin-react-auto-components
 
 ## Quick start
 
-### Vite
+Import the plugin from the entry that matches your bundler and drop
+`Components({ … })` into its plugins array — the options are identical
+everywhere. Click a bundler to expand its config.
+
+> **Config in TypeScript?** Supported by Vite, Farm, Rolldown, Rspack (CLI ≥ v1.5)
+> and Next.js (≥ 15) — all verified. Which extension to use:
+>
+> - **Vite / Farm / Next.js → `.ts`.** They load the config with their own
+>   toolchain, which handles this ESM-only plugin's `import`. (Next.js accepts
+>   `next.config.ts` but **rejects `.mts`**.)
+> - **Rspack / Rolldown → `.mts`.** They use Node's native TS loader, so `.mts`
+>   guarantees the config is ESM; a plain `.ts` there needs `"type": "module"` in
+>   `package.json`.
+> - **Webpack / Rollup** need `ts-node` / a config plugin for a TS config, so
+>   their examples below stay `.mjs`.
+
+<details open>
+<summary><b>Vite</b></summary>
 
 ```ts
 // vite.config.ts
@@ -72,7 +90,10 @@ export default defineConfig({
 });
 ```
 
-### Webpack
+</details>
+
+<details>
+<summary><b>Webpack</b></summary>
 
 ```js
 // webpack.config.mjs  (or any config that uses ESM `import`)
@@ -93,18 +114,129 @@ export default {
 > `const Components = require("unplugin-react-auto-components/webpack").default`
 > (Node loads the ESM build via its built-in `require(ESM)`).
 
-### Rollup / Rspack / esbuild / Rolldown / Farm
+</details>
 
-Same idea — import from `unplugin-react-auto-components/rollup`, `/rspack`,
-`/esbuild`, `/rolldown`, or `/farm`.
+<details>
+<summary><b>Rollup</b></summary>
 
-### Next.js
+```js
+// rollup.config.mjs
+import Components from "unplugin-react-auto-components/rollup";
+import { AntdResolver } from "unplugin-react-auto-components/resolvers";
+
+export default {
+  input: "src/main.jsx",
+  plugins: [
+    // ⚠️ Rollup ignores unplugin's `enforce` and runs plugins in array order,
+    // so Components MUST come before your JSX transform (e.g. @rollup/plugin-babel).
+    Components({
+      dts: true,
+      resolvers: [AntdResolver({ version: 5, prefix: "Ant" })],
+    }),
+    // …@rollup/plugin-node-resolve, @rollup/plugin-babel, etc.
+  ],
+};
+```
+
+</details>
+
+<details>
+<summary><b>Rspack</b></summary>
+
+```js
+// rspack.config.mts  (TypeScript; Rspack CLI ≥ v1.5. A CommonJS .js with `require` also works)
+import Components from "unplugin-react-auto-components/rspack";
+import { AntdResolver } from "unplugin-react-auto-components/resolvers";
+
+export default {
+  plugins: [
+    Components({
+      dts: true,
+      resolvers: [AntdResolver({ version: 5, prefix: "Ant" })],
+    }),
+  ],
+};
+```
+
+</details>
+
+<details>
+<summary><b>esbuild</b></summary>
+
+```js
+// build.mjs — esbuild plugins are JS-API only (they can't run via the esbuild CLI)
+import { build } from "esbuild";
+import Components from "unplugin-react-auto-components/esbuild";
+import { AntdResolver } from "unplugin-react-auto-components/resolvers";
+
+await build({
+  entryPoints: ["src/main.jsx"],
+  bundle: true,
+  jsx: "automatic",
+  plugins: [
+    Components({
+      dts: true,
+      resolvers: [AntdResolver({ version: 5, prefix: "Ant" })],
+    }),
+  ],
+});
+```
+
+</details>
+
+<details>
+<summary><b>Rolldown</b></summary>
+
+```js
+// rolldown.config.mts  (TypeScript)
+import { defineConfig } from "rolldown";
+import Components from "unplugin-react-auto-components/rolldown";
+import { AntdResolver } from "unplugin-react-auto-components/resolvers";
+
+export default defineConfig({
+  input: "src/main.jsx",
+  plugins: [
+    // ⚠️ Like Rollup, Rolldown runs plugins in array order (ignores `enforce`) —
+    // put Components before the JSX transform.
+    Components({
+      dts: true,
+      resolvers: [AntdResolver({ version: 5, prefix: "Ant" })],
+    }),
+  ],
+});
+```
+
+</details>
+
+<details>
+<summary><b>Farm</b></summary>
+
+```ts
+// farm.config.ts
+import { defineConfig } from "@farmfe/core";
+import Components from "unplugin-react-auto-components/farm";
+import { AntdResolver } from "unplugin-react-auto-components/resolvers";
+
+export default defineConfig({
+  plugins: [
+    Components({
+      dts: true,
+      resolvers: [AntdResolver({ version: 5, prefix: "Ant" })],
+    }),
+  ],
+});
+```
+
+</details>
+
+<details>
+<summary><b>Next.js</b></summary>
 
 Next.js has no built-in component auto-import — use the dedicated `/next` entry
 to wrap your config (the React analog of `unplugin-vue-components/nuxt`):
 
 ```js
-// next.config.mjs
+// next.config.ts  (TypeScript, Next.js ≥ 15 — Next accepts .ts, NOT .mts)
 import ReactComponents from "unplugin-react-auto-components/next";
 
 export default ReactComponents({
@@ -136,13 +268,16 @@ module.exports = {
 
 </details>
 
-> ✅ **Verified on Next.js 14 (Pages Router, `next build` / webpack)** — a
-> component used in JSX with no import is auto-injected at build time.
+> ✅ **Verified on Next.js 15 (Pages Router, `next build` / webpack, a TS
+> `next.config.ts`)** — a component used in JSX with no import is auto-injected
+> at build time. (Works on Next.js 14 too, via `next.config.js`.)
 >
 > ⚠️ **Turbopack is not supported.** `next dev --turbo` and Turbopack builds
 > bypass the webpack pipeline, so the plugin won't run — use the default
 > webpack mode. In the App Router this works for **Client Components**;
 > auto-import inside Server Components is untested.
+
+</details>
 
 ## Local components — zero config
 
