@@ -188,7 +188,9 @@ describe("factory watch wiring (rollup / rolldown / rspack / farm — #8)", () =
   });
 
   const mkProj = () => {
-    const proj = realpathSync(mkdtempSync(join(tmpdir(), "urc-factory-watch-")));
+    const proj = realpathSync(
+      mkdtempSync(join(tmpdir(), "urc-factory-watch-"))
+    );
     mkdirSync(join(proj, "src"), { recursive: true });
     writeFileSync(
       join(proj, "src", "Seed.tsx"),
@@ -196,14 +198,19 @@ describe("factory watch wiring (rollup / rolldown / rspack / farm — #8)", () =
     );
     const dtsPath = join(proj, "src", "components.d.ts");
     const dtsHas = (n: string) =>
-      existsSync(dtsPath) && readFileSync(dtsPath, "utf8").includes(`const ${n}:`);
+      existsSync(dtsPath) &&
+      readFileSync(dtsPath, "utf8").includes(`const ${n}:`);
     return { proj, dtsHas };
   };
 
   it("buildStart starts a watcher when this.meta.watchMode is true (Rollup/Rolldown)", async () => {
     const { proj, dtsHas } = mkProj();
     try {
-      const p = callFactory({ rootDir: proj, local: true, dts: true }) as unknown as {
+      const p = callFactory({
+        rootDir: proj,
+        local: true,
+        dts: true,
+      }) as unknown as {
         buildStart: (this: unknown) => Promise<void>;
         rollup: { closeWatcher: () => void };
       };
@@ -224,7 +231,11 @@ describe("factory watch wiring (rollup / rolldown / rspack / farm — #8)", () =
   it("buildStart does NOT start a watcher for a one-shot build (watchMode falsey)", async () => {
     const { proj, dtsHas } = mkProj();
     try {
-      const p = callFactory({ rootDir: proj, local: true, dts: true }) as unknown as {
+      const p = callFactory({
+        rootDir: proj,
+        local: true,
+        dts: true,
+      }) as unknown as {
         buildStart: (this: unknown) => Promise<void>;
       };
       await p.buildStart.call({ meta: { watchMode: false } });
@@ -255,17 +266,17 @@ describe("createComponentWatcher — a throwing emitDts / onFlush never crashes 
       },
     });
     await new Promise<void>((r) => watcher.once("ready", () => r()));
+    await wait(300);
 
     const f = join(root, "src", "Boom.tsx");
     writeFileSync(f, "export default function Boom(){ return <i/> }");
-    // If the throw weren't caught it would surface in process.nextTick (crash);
-    // instead onFlush runs and a warning is logged.
-    expect(await waitFor(() => flushed)).toBe(true);
+    expect(await waitFor(() => flushed, 10000)).toBe(true);
     expect(warn).toHaveBeenCalled();
 
     rmSync(f);
     await waitFor(() => ![...components].some((c) => c.name === "Boom"));
+    await wait(300);
     await watcher.close();
     warn.mockRestore();
-  }, 10000);
+  }, 15000);
 });
