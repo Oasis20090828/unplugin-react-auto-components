@@ -132,4 +132,48 @@ function App() {
     expect(plugin.transformInclude('/anything/App.ts')).toBe(false)
     expect(plugin.transformInclude('/node_modules/x/App.tsx')).toBe(false)
   })
+
+  it('skips the module (returns undefined, no sourcemap) when nothing is injected', () => {
+    const plugin = realize(
+      callFactory({ rootDir: root, resolvers: [fakeUiResolver()], dts: false, local: false }),
+    )
+    // No auto-importable component JSX → the transformer injects nothing → the
+    // hook must return undefined so the bundler skips it (no wasted sourcemap).
+    expect(plugin.transform('export const x = 1', join(root, 'src/plain.tsx'))).toBeUndefined()
+  })
+
+  it('returns { code, map } only when an import is actually injected', () => {
+    const plugin = realize(
+      callFactory({ rootDir: root, resolvers: [fakeUiResolver()], dts: false, local: false }),
+    )
+    const out = plugin.transform('const y = <UiButton/>', join(root, 'src/uses.tsx'))
+    expect(out).toBeTruthy()
+    const obj = out as { code: string; map?: unknown }
+    expect(obj.code).toContain("import { Button as UiButton } from 'fake-ui'")
+    expect(obj.map).toBeTruthy()
+  })
+
+  it('applies importPathTransform to both the injected import and the dts', async () => {
+    const plugin = realize(
+      callFactory({
+        rootDir: root,
+        resolvers: [fakeUiResolver()],
+        dts: true,
+        local: false,
+        // Redirect the bare barrel to its ESM deep-import entry.
+        importPathTransform: (p) => (p === 'fake-ui' ? 'fake-ui/es' : undefined),
+      }),
+    )
+    await plugin.buildStart()
+
+    // dts declaration points at the rewritten specifier…
+    const dts = readFileSync(join(root, 'src/components.d.ts'), 'utf-8')
+    expect(dts).toContain("typeof import('fake-ui/es')['Button']")
+    expect(dts).not.toContain("typeof import('fake-ui')['Button']")
+
+    // …and so does the injected import — the two stay in agreement.
+    const out = plugin.transform('const y = <UiButton/>', join(root, 'src/uses.tsx'))
+    const code = (out as { code: string }).code
+    expect(code).toContain("import { Button as UiButton } from 'fake-ui/es'")
+  })
 })

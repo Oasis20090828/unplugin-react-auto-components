@@ -37,7 +37,9 @@ export default function App() {
 - 🎨 **Built-in resolvers** — Ant Design (v4 + v5), Ant Design Mobile, MUI, shadcn/ui
 - 🔧 **Custom resolvers in one line** — `createResolver({ module, prefix })`
 - 📝 **`components.d.ts`** — auto-emitted so TypeScript + your editor stay happy
-- ♻️ **Live in dev** — add a new component file and it shows up without restarting; surgical HMR (no full page reload when possible)
+- ♻️ **Live in dev** — add a new component file and it shows up without restarting; surgical HMR on Vite/Webpack/Rspack (no full page reload when possible)
+- 🧩 **Every component shape** — function, arrow, `forwardRef` / `memo` / `React.lazy`, class components, Fragment returns, re-export barrels, and named-by-file anonymous defaults
+- 🧠 **AST-accurate** — a commented-out or `import type` import never blocks auto-import; `"use client"` / `"use server"` directives are preserved
 - 🛠️ **Vite / Webpack / Rollup / Rspack / esbuild / Rolldown / Farm** — plus **Next.js** (webpack mode, verified)
 
 ## Install
@@ -309,6 +311,19 @@ Components({
 });
 ```
 
+**Component shapes that are detected** (a capitalized name is required — lowercase
+JSX-returning helpers like hooks are ignored):
+
+```tsx
+export default function Foo() { return <div/> }        // default fn
+export const Bar = () => <>frag</>                      // arrow + Fragment
+export const Baz = forwardRef((p, r) => <i ref={r}/>)  // forwardRef / memo
+export const Lazy = React.lazy(() => import('./Lazy'))  // React.lazy
+export class Panel extends React.Component { render() { return <div/> } } // class
+export { Button, Card as Panel } from './widgets'       // barrel re-export
+export default () => <div/>                             // anonymous → named from file (Foo.tsx → <Foo/>)
+```
+
 ## Built-in resolvers
 
 All resolvers live in `unplugin-react-auto-components/resolvers`.
@@ -470,24 +485,60 @@ const MyResolver: ComponentResolver = {
 | `dts`       | `boolean \| { filename?, rootPath? }` | `false`                     | Emit `components.d.ts`. Pass an object to customize filename / output path. |
 | `include`   | `FilterPattern`                       | `[/\.[jt]sx$/]`             | Which files to transform.                                                   |
 | `exclude`   | `FilterPattern`                       | `[/node_modules/, /\.git/]` | Which files to skip.                                                        |
+| `importPathTransform` | `(path: string) => string \| undefined` | `undefined` | Rewrite a resolved import specifier (a resolver's `from`, or a local relative path). Return a replacement, or `undefined` to keep it. Applied to the injected import **and** its `components.d.ts` type, so the two stay in sync (style / side-effect paths untouched). E.g. `path => (path === 'antd' ? 'antd/es' : undefined)` redirects antd's barrel to its ESM build. |
 
 ## Live updates without restart
 
-Both Vite (via `server.watcher`) and Webpack (via a private chokidar) watch
-your component directories. When a file is added/changed/removed:
+In watch/dev mode the plugin watches your component directories, so adding /
+changing / removing a component file updates `components.d.ts` and the auto-import
+map without a restart. What each bundler gets:
 
-1. `components.d.ts` is regenerated (skipped if the content didn't actually change — so the TS server stays calm)
-2. Surgical HMR signal is sent **only to the files that actually use the affected component name** (React Fast Refresh keeps state); falls back to a `full-reload` only if nothing in the usage map matches
-3. In Webpack, `compilation.fileDependencies` is updated so webpack starts watching the new file too
+| bundler | watch integration | how |
+| ------- | ----------------- | --- |
+| **Vite** | full + **surgical HMR** | reuses `server.watcher`; sends a `js-update` only to files that use the changed component (Fast Refresh keeps state), else `full-reload` |
+| **Webpack / Rspack** | full | private chokidar + `compilation.fileDependencies` + `watching.invalidate()` |
+| **Rollup / Rolldown** | dts + import map | own chokidar, started only under `-w` (`this.meta.watchMode`); the next rebuild of an edited file injects the new import |
+| **Farm** | dts + import map | own chokidar, started in `configureDevServer` (dev only) |
+| **esbuild** | not automatic | esbuild exposes no watch signal to plugins, and auto-starting a watcher would hang one-shot `build()`. Run your own chokidar in the build script (see `esbuild-playground/build.mjs`) |
 
-End result: add `Foo.tsx` to your components dir → `<Foo/>` becomes usable in
-your editor + browser within ~100ms, no restart.
+`components.d.ts` writes are skipped when the content is unchanged (a body-only
+edit), so the TS server stays calm. Every one-shot production build exits
+cleanly — the watcher only ever starts when watch mode is actually detected.
+
+> **Rollup / Rolldown / Farm caveat:** these bundlers expose no plugin-level API
+> to force-rebuild an already-built module, so there's no *surgical* HMR. The
+> watcher keeps the dts + import map fresh; a component added while a file already
+> references it shows up the next time that file is re-transformed (i.e. on your
+> next edit). Vite, Webpack and Rspack do the full surgical update.
+
+End result (Vite/Webpack/Rspack): add `Foo.tsx` → `<Foo/>` usable in editor +
+browser within ~100ms, no restart.
+
+## Monorepo
+
+Two supported patterns:
+
+- **Per-package (recommended).** Each package configures the plugin with its own
+  `rootDir`. Components stay scoped to their package; no accidental cross-package
+  imports.
+- **Single root + glob.** Point one instance at the repo root and widen `globs`:
+
+  ```ts
+  Components({ rootDir: repoRoot, globs: ['packages/*/src/**/*.tsx'] })
+  ```
+
+  All packages share one component pool and `components.d.ts`; cross-package tags
+  resolve via relative paths. Use this only if you actually want cross-package
+  auto-import.
 
 ## Gotchas
 
-- **`prefix` must be PascalCase.** `<antButton/>` is a host element string; `<AntButton/>` is a component reference. The plugin will warn if you pass a lowercase prefix.
-- **Already-imported names are left alone.** If your file does `import App from './App'`, the plugin won't shadow it even if a resolver also exports `App`.
+- **Plugin order in Rollup / Rolldown.** These two ignore unplugin's `enforce: 'pre'`, so you must place this plugin **before** your JSX/babel plugin in the `plugins` array — otherwise it receives already-compiled `jsx()` calls and can't see the raw `<Tag>`s. The plugin warns once if it detects it ran too late. (Vite, Webpack, Rspack, esbuild and Farm honor `pre` automatically.)
+- **`"use client"` / `"use server"` are preserved.** Injected imports go *after* the directive prologue, so the directive stays the module's first statement (Next.js App Router won't silently demote a Client Component).
+- **`prefix` must be PascalCase.** `<antButton/>` is a host element string; `<AntButton/>` is a component reference. The plugin warns if you pass a lowercase prefix.
+- **Already-imported names are left alone.** If your file does `import App from './App'`, the plugin won't shadow it even if a resolver also exports `App`. Binding detection is AST-based, so a commented-out or type-only import (`import type { App }`) does **not** block auto-import.
 - **Local wins over resolver in dts.** Same name from both your `App.tsx` and antd v5's `App` → local wins, console warning emitted.
+- **Anonymous default exports are named from the file.** `export default () => <div/>` in `Card.tsx` registers as `<Card/>` (a bare `index.tsx` uses its parent dir).
 
 ## Debug logging
 
@@ -540,6 +591,60 @@ without component JSX off the parse hot path.
 > **Rollup / Rolldown ordering:** these run plugins in array order and ignore
 > unplugin's `enforce`, so place this plugin **before** your JSX-transform
 > plugin (e.g. `@rollup/plugin-babel`) — it must see the raw JSX first.
+
+## Changelog
+
+### Unreleased
+
+**Features**
+
+- **Dev-watch on 6 bundlers.** Rspack, Rollup, Rolldown and Farm now watch
+  component files in watch/dev mode (previously Vite + Webpack only) — new/removed
+  components refresh `components.d.ts` and the import map without a restart. One-shot
+  production builds never start a watcher (they'd hang). esbuild has no plugin-level
+  watch signal; use the external-watcher pattern in `esbuild-playground`.
+- **`importPathTransform` option.** Rewrite every injected import specifier (and its
+  matching dts declaration), e.g. redirect `antd` → `antd/es`.
+- **Broader component detection.** Class components, `React.lazy(...)`,
+  `export default memo/forwardRef(...)`, barrel re-exports (`export { X } from './x'`),
+  Fragment returns (`<>…</>`), and anonymous default exports (named from the filename).
+- **shadcn/ui `Ui` tag prefix by default** (`<UiButton/>`); **antd resolver `version`
+  is now a plain number** (`>= 5` behavior).
+- **Monorepo** guidance (per-package instances, or one root + a `packages/*` glob).
+
+**Fixes**
+
+- **`"use client"` / `"use server"` preserved.** Imports are injected *after* the
+  directive prologue, so Next.js App Router no longer silently demotes Client
+  Components.
+- **AST-accurate binding detection.** A commented-out import, an import inside a
+  string, or an `import type { X }` no longer blocks auto-import of `<X/>`.
+- **Plugin-ordering self-check** warns once if the plugin runs after the JSX transform
+  (the Rollup/Rolldown foot-gun).
+- **Consistent lowercase-prefix warning** across all resolvers; SCREAMING_CASE
+  re-exports are no longer mistaken for components.
+- Deterministic `components.d.ts` (sorted + atomic write) — no dev repaint loop.
+- The dev watcher now isolates errors: a failed `components.d.ts` write (e.g. a transient Windows file lock) or a throwing HMR handler is logged and skipped instead of crashing the dev server (the flush runs inside `process.nextTick`, where an uncaught throw would be fatal).
+
+**Performance**
+
+- Single AST pass per file (merged the JSX-usage and bound-name walks).
+- Sourcemap generation skipped when nothing is injected (most files); line-granularity
+  map otherwise.
+- Startup scan skipped entirely when both `local` and `dts` are off.
+- `local-pkg` is loaded lazily (only when a dynamic resolver introspects a package).
+
+**Internals / tooling**
+
+- CI workflow (type-check + tests + build on every push/PR).
+- `ComponentResolver.type` is now optional (`"component"` only — React has no directives).
+- Removed the redundant `./types` subpath export.
+
+**Known limitation**
+
+- Rollup / Rolldown / Farm have no plugin API to force-rebuild an already-built module,
+  so their watch mode refreshes types/imports but has no *surgical* HMR (see
+  [Live updates](#live-updates-without-restart)). Vite / Webpack / Rspack do.
 
 ## License
 

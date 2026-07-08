@@ -283,3 +283,99 @@ describe('transformer (raw JSX)', () => {
     expect(consumerUsage.get('/p/A.tsx')).toEqual(new Set(['Foo']))
   })
 })
+
+describe('transformer — bound-name detection is AST-based (comments / strings / type-only)', () => {
+  const btn = () =>
+    tableResolver([{ jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' }])
+
+  it('a line-commented import does NOT block auto-import', () => {
+    const out = transform(ctx(`// import { Button } from 'antd'\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('a block-commented import does NOT block auto-import', () => {
+    const out = transform(ctx(`/* import { Button } from 'antd' */\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('an import written inside a string literal does NOT block', () => {
+    const out = transform(ctx(`const code = "import { Button } from 'antd'"\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('`import type { Button }` does NOT block the value import (erased at runtime)', () => {
+    const out = transform(ctx(`import type { Button } from './types'\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('`import { type Button }` (inline type specifier) does NOT block', () => {
+    const out = transform(ctx(`import { type Button } from './types'\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('a REAL value import still blocks (control — never double-inject)', () => {
+    const out = transform(ctx(`import { Button } from './local'\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).not.toContain("from 'antd'")
+  })
+
+  it('a destructured binding still blocks (const { Button } = lib)', () => {
+    const out = transform(ctx(`const { Button } = lib\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).not.toContain("from 'antd'")
+  })
+
+  it('a top-level declaration still blocks its name', () => {
+    const out = transform(ctx(`function Button() { return null }\nconst x = <Button/>`, { resolvers: [btn()] }))
+    expect(out).not.toContain("from 'antd'")
+  })
+})
+
+describe('transformer — function/catch params are function-scoped (shadow locally, not collected)', () => {
+  const btn = () =>
+    tableResolver([{ jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' }])
+
+  it('a same-named param does NOT block module-scope auto-import (param shadows only locally)', () => {
+    // `Button` as a param is function-scoped: it shadows inside wrap() but the
+    // module-scope <Button/> still needs the import. Collecting params (a
+    // reviewer suggestion) would wrongly suppress this → runtime undefined.
+    const src = `function wrap(Button) { return <Button/> }\nconst x = <Button/>`
+    const out = transform(ctx(src, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('a capitalized render-prop param used as a tag still injects (harmless, JS scoping shadows it)', () => {
+    // The injected import is shadowed by the param inside the function, so the
+    // JSX resolves to the param at runtime; the import is just dead code.
+    const src = `const List = ({ renderItem: Button }) => <Button/>`
+    const out = transform(ctx(src, { resolvers: [btn()] }))
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+})
+
+describe('transformer — preserves the directive prologue (#10 use client / use server)', () => {
+  const btn = () =>
+    tableResolver([{ jsxName: 'Button', name: 'Button', from: 'antd', type: 'Export' }])
+
+  it('injects AFTER "use client" so the directive stays the first statement', () => {
+    const out = transform(ctx(`"use client"\nfunction Page(){ return <Button/> }`, { resolvers: [btn()] }))
+    expect(out.split('\n')[0]).toBe('"use client"')
+    expect(out).toContain("import { Button } from 'antd'")
+    expect(out.indexOf('"use client"')).toBeLessThan(out.indexOf("import { Button }"))
+  })
+
+  it('keeps "use client" first even with a comment between it and the code', () => {
+    const out = transform(ctx(`"use client"\n// top\nfunction Page(){ return <Button/> }`, { resolvers: [btn()] }))
+    expect(out.split('\n')[0]).toBe('"use client"')
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it("preserves 'use server'", () => {
+    const out = transform(ctx(`'use server'\nfunction Action(){ return <Button/> }`, { resolvers: [btn()] }))
+    expect(out.split('\n')[0]).toBe("'use server'")
+    expect(out).toContain("import { Button } from 'antd'")
+  })
+
+  it('still prepends at the very top when there is no directive', () => {
+    const out = transform(ctx(`function Page(){ return <Button/> }`, { resolvers: [btn()] }))
+    expect(out.split('\n')[0]).toBe("import { Button } from 'antd'")
+  })
+})

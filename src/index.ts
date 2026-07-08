@@ -2,7 +2,12 @@ import { createUnplugin, type UnpluginFactory } from "unplugin";
 import MagicString from "magic-string";
 import { relative } from "path";
 import { createFilter } from "@rollup/pluginutils";
-import type { GenerateDtsOptions, Options, TransformOptions } from "./types";
+import type {
+  Components,
+  GenerateDtsOptions,
+  Options,
+  TransformOptions,
+} from "./types";
 import { transform } from "./core/transformer";
 import { searchGlob } from "./core/searchGlob";
 import { generateDts } from "./core/generateDts";
@@ -51,10 +56,14 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
   // where the dts file lives, not where to look for components — conflating
   // them was the old footgun (set dts.rootPath → suddenly empty dts because
   // the scanner pointed at the dts folder, which has no .tsx).
-  const searchGlobResult = searchGlob({
-    rootPath: options.rootDir,
-    globs: options.globs,
-  });
+  //
+  // But skip the scan entirely when nothing consumes it — local auto-import off
+  // AND dts off (a resolver-only setup). The scan is synchronous and Babel-parses
+  // every matched file, so on a large repo it's a real, wasted cold-start cost.
+  const needsScan = options.local || dtsEnabled;
+  const searchGlobResult: Components = needsScan
+    ? searchGlob({ rootPath: options.rootDir, globs: options.globs })
+    : new Set();
 
   // Auto-pick a sensible dts location when the user didn't say.
   // Precedence: dts.rootPath > src/types > src > rootDir
@@ -65,6 +74,7 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
     rootPath: dtsConfig?.rootPath || defaultDtsRoot,
     local: options.local,
     resolvers: options.resolvers,
+    importPathTransform: options.importPathTransform,
   };
 
   const emitDts = () => {
@@ -86,7 +96,10 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
   // only when the component set actually changes (the watcher's onFlush calls
   // `invalidateLocalNames` on a structural add/unlink/rename). `undefined` means
   // "needs (re)build"; `null` means local discovery is off.
-  let localNamesCache: ReturnType<typeof resolveLocalJsxNames> | null | undefined;
+  let localNamesCache:
+    | ReturnType<typeof resolveLocalJsxNames>
+    | null
+    | undefined;
   const getLocalNames = () => {
     if (localNamesCache === undefined) {
       localNamesCache = options.local
@@ -97,6 +110,91 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
   };
   const invalidateLocalNames = () => {
     localNamesCache = undefined;
+  };
+
+  // One-time guard for the "plugin ran after the JSX transform" warning below.
+  let warnedMisorder = false;
+
+  // ── Webpack + Rspack: identical Compiler API, so share the wiring ──────────
+  // Own chokidar + fileDependencies + batched invalidate. Gated on
+  // `compiler.watching` so a one-shot build never starts a watcher.
+  interface WatchCompiler {
+    watching?: { invalidate?(): void };
+    hooks: {
+      watchRun: { tap(name: string, cb: () => void): void };
+      compilation: {
+        tap(
+          name: string,
+          cb: (c: {
+            fileDependencies: { add(p: string): void; delete(p: string): void };
+          }) => void
+        ): void;
+      };
+      shutdown?: { tapPromise?(name: string, cb: () => Promise<void>): void };
+    };
+  }
+  const setupCompilerWatch = (compiler: WatchCompiler) => {
+    if (!liveEnabled) return;
+    let ownedWatcher: ReturnType<typeof createComponentWatcher> | undefined;
+    let fileDepQueue: FileEvent[] = [];
+
+    compiler.hooks.watchRun.tap(PLUGIN_NAME, () => {
+      // `watchRun` re-fires per rebuild; guard so we don't spawn duplicates.
+      // Gate on `compiler.watching` so a one-shot build never starts a watcher
+      // (which would keep the process alive).
+      if (ownedWatcher || !compiler.watching) return;
+      ownedWatcher = createComponentWatcher({
+        rootDir: options.rootDir,
+        globs: options.globs,
+        components: searchGlobResult,
+        emitDts,
+        onFlush: (events, { changed }) => {
+          if (!changed) return;
+          invalidateLocalNames();
+          fileDepQueue.push(...events);
+          compiler.watching?.invalidate?.();
+        },
+      });
+    });
+
+    // Drain queued events into the live compilation's `fileDependencies` so the
+    // bundler's own watcher starts tracking these files going forward.
+    compiler.hooks.compilation.tap(PLUGIN_NAME, (compilation) => {
+      if (!fileDepQueue.length) return;
+      for (const { path, type } of fileDepQueue) {
+        if (type === "unlink") compilation.fileDependencies.delete(path);
+        else compilation.fileDependencies.add(path);
+      }
+      fileDepQueue = [];
+    });
+
+    compiler.hooks.shutdown?.tapPromise?.(PLUGIN_NAME, async () => {
+      await ownedWatcher?.close();
+      ownedWatcher = undefined;
+    });
+  };
+
+  // ── Rollup / Rolldown / Farm: no dev-server hook, so run our own chokidar ──
+  // Keeps `searchGlobResult` + the dts + the localNames cache fresh; the next
+  // consumer rebuild then injects the new imports. Started only when watch mode
+  // is confirmed (see the buildStart / farm hooks) so a one-shot build never
+  // starts it — which would hang the process.
+  let standaloneWatcher: ReturnType<typeof createComponentWatcher> | undefined;
+  const startStandaloneWatcher = () => {
+    if (standaloneWatcher || !liveEnabled) return;
+    standaloneWatcher = createComponentWatcher({
+      rootDir: options.rootDir,
+      globs: options.globs,
+      components: searchGlobResult,
+      emitDts,
+      onFlush: (_events, { changed }) => {
+        if (changed) invalidateLocalNames();
+      },
+    });
+  };
+  const stopStandaloneWatcher = () => {
+    void standaloneWatcher?.close();
+    standaloneWatcher = undefined;
   };
 
   return {
@@ -119,6 +217,17 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
       );
       await setupResolvers(options.resolvers);
       emitDts();
+      // Rollup / Rolldown call `buildStart` with their PluginContext as `this`,
+      // exposing `this.meta.watchMode`. They ignore our `enforce` and have no
+      // dev-server hook, so start our own watcher — but only in watch mode, so a
+      // one-shot build never starts it. (Other bundlers' `this` has no `.meta`,
+      // and Vite dev is handled by `configureServer` below.)
+      const rollupMeta = (
+        this as unknown as {
+          meta?: { watchMode?: boolean };
+        }
+      ).meta;
+      if (rollupMeta?.watchMode) startStandaloneWatcher();
     },
 
     transformInclude(id) {
@@ -126,6 +235,26 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
     },
 
     transform(code, id) {
+      // Ordering self-check. If the code we receive is already JSX-compiled
+      // (a `react/jsx-runtime` import + no raw `<Tag>` left), a JSX transform
+      // ran BEFORE us — auto-import can't see the original tags. Rollup and
+      // Rolldown ignore `enforce: 'pre'`, so this is their classic foot-gun:
+      // the plugin must be placed before the JSX/babel plugin manually.
+      if (
+        !warnedMisorder &&
+        /\.[jt]sx$/.test(id) &&
+        /react\/jsx-(dev-)?runtime/.test(code) &&
+        !/<[A-Z]/.test(code)
+      ) {
+        warnedMisorder = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[${PLUGIN_NAME}] This plugin appears to run AFTER your JSX transform ` +
+            `(code is already compiled to react/jsx-runtime calls with no raw <Tag> to detect), ` +
+            `so auto-import can't work. In Rollup and Rolldown, \`enforce: 'pre'\` is ignored — ` +
+            `place this plugin BEFORE @rollup/plugin-babel / your JSX plugin in the plugins array.`
+        );
+      }
       const ctx: TransformOptions = {
         id,
         code: new MagicString(code),
@@ -135,11 +264,22 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
         local: options.local,
         localNames: getLocalNames(),
         consumerUsage,
+        importPathTransform: options.importPathTransform,
       };
       const result = transform(ctx);
+      // The transformer only ever *prepends* import lines, and only when it
+      // actually injects something. If the buffer is unchanged (no `<Capital`
+      // JSX, or every tag was already bound / unresolvable — the vast majority
+      // of files), skip the module entirely: no needless sourcemap generation
+      // and no identity map threaded through the bundler. `hasChanged()` is
+      // exactly the "an import was injected" signal.
+      if (!ctx.code.hasChanged()) return undefined;
       return {
         code: result,
-        map: ctx.code.generateMap({ hires: true, source: id }),
+        // Injected imports are whole-line prepends, so a line-granularity map is
+        // exact (every original line just shifts down) — no need for the far
+        // costlier per-character `hires` mode.
+        map: ctx.code.generateMap({ hires: false, source: id }),
       };
     },
 
@@ -235,70 +375,27 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (
       },
     },
 
-    // ── Webpack: own chokidar + fileDependencies + batched invalidate ──────
+    // ── Webpack + Rspack: same Compiler API, shared wiring ─────────────────
     webpack(compiler) {
-      if (!liveEnabled) return;
+      setupCompilerWatch(compiler as unknown as WatchCompiler);
+    },
+    rspack(compiler) {
+      setupCompilerWatch(compiler as unknown as WatchCompiler);
+    },
 
-      let ownedWatcher: ReturnType<typeof createComponentWatcher> | undefined;
-      // Events that the next `compilation` hook should drain into
-      // `compilation.fileDependencies`. Without this, webpack wouldn't watch
-      // component files that aren't (yet) imported by anything.
-      let fileDepQueue: FileEvent[] = [];
+    // ── Rollup / Rolldown: watcher starts in buildStart (this.meta.watchMode);
+    // close it when the watch process exits. `closeWatcher` is a no-op field on
+    // a one-shot build (it never started a watcher).
+    rollup: { closeWatcher: stopStandaloneWatcher },
+    rolldown: { closeWatcher: stopStandaloneWatcher },
 
-      compiler.hooks.watchRun.tap(PLUGIN_NAME, () => {
-        // `watchRun` re-fires on every rebuild; guard so we don't keep
-        // spawning watchers. Also gate on `compiler.watching` so a one-shot
-        // `webpack` build never starts a watcher (and never keeps the process
-        // alive).
-        if (ownedWatcher || !compiler.watching) return;
-
-        ownedWatcher = createComponentWatcher({
-          rootDir: options.rootDir,
-          globs: options.globs,
-          components: searchGlobResult,
-          emitDts,
-          onFlush: (events, { changed }) => {
-            // No actual change → don't bother webpack. The watcher already
-            // coalesces same-tick events via `process.nextTick`, so `onFlush`
-            // fires at most once per tick. We stash events for the next
-            // compilation hook and ask webpack to rebuild.
-            if (!changed) return;
-            // The component set changed → the cached jsxTag map is stale.
-            invalidateLocalNames();
-            fileDepQueue.push(...events);
-            compiler.watching?.invalidate();
-          },
-        });
-      });
-
-      // Drain queued events into the live compilation's `fileDependencies` so
-      // webpack's own watcher starts tracking these files going forward.
-      // We don't depend on `webpack` types; declare only the surface we touch.
-      interface WebpackCompilation {
-        fileDependencies: {
-          add(path: string): void;
-          delete(path: string): void;
-        };
-      }
-      compiler.hooks.compilation.tap(
-        PLUGIN_NAME,
-        (compilation: WebpackCompilation) => {
-          if (!fileDepQueue.length) return;
-          for (const { path, type } of fileDepQueue) {
-            if (type === "unlink") {
-              compilation.fileDependencies.delete(path);
-            } else {
-              compilation.fileDependencies.add(path);
-            }
-          }
-          fileDepQueue = [];
-        }
-      );
-
-      compiler.hooks.shutdown?.tapPromise?.(PLUGIN_NAME, async () => {
-        await ownedWatcher?.close();
-        ownedWatcher = undefined;
-      });
+    // ── Farm: `configureDevServer` runs ONLY in dev (never in `farm build`),
+    // so it's the one safe place to start our watcher without risking a hung
+    // one-shot build.
+    farm: {
+      configureDevServer() {
+        startStandaloneWatcher();
+      },
     },
   };
 };

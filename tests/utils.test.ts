@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   detectDtsRoot,
   isCapitalCase,
@@ -10,6 +10,7 @@ import {
   slash,
   stringifyImport,
   toKebabCase,
+  warnNonPascalPrefix,
 } from '../src/core/utils'
 
 describe('utils', () => {
@@ -118,5 +119,39 @@ describe('utils', () => {
         rmSync(base, { recursive: true, force: true })
       }
     })
+  })
+})
+
+describe('warnNonPascalPrefix', () => {
+  it('warns when the prefix is not PascalCase', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warnNonPascalPrefix('ui', 'ShadcnResolver')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toContain('prefix "ui"')
+    expect(spy.mock.calls[0][0]).toContain('Ui') // suggests the PascalCase fix
+    spy.mockRestore()
+  })
+
+  it('is silent for a PascalCase prefix or no prefix', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warnNonPascalPrefix('Ui', 'ShadcnResolver')
+    warnNonPascalPrefix('', 'AntdResolver')
+    warnNonPascalPrefix(undefined, 'AntdResolver')
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+})
+
+describe('ComponentResolver.type is optional (React has no directives)', () => {
+  it('resolveComponent / listAllComponents accept a resolver that omits `type`', async () => {
+    const { resolveComponent, listAllComponents } = await import('../src/core/manager')
+    const bare = {
+      // no `type` field at all
+      resolve: (jsx: string) =>
+        jsx === 'Foo' ? { jsxName: 'Foo', name: 'Foo', from: 'lib', type: 'Export' as const } : undefined,
+      list: () => [{ jsxName: 'Foo', name: 'Foo', from: 'lib', type: 'Export' as const }],
+    }
+    expect(resolveComponent([bare], 'Foo')?.from).toBe('lib')
+    expect(listAllComponents([bare]).map((c) => c.jsxName)).toEqual(['Foo'])
   })
 })

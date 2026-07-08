@@ -1,5 +1,6 @@
 import type { ComponentResolveResult, ComponentResolver } from "../../types";
 import { discoverExports } from "../discover";
+import { warnNonPascalPrefix } from "../utils";
 
 export interface CreateResolverOptions {
   /** npm package to introspect, e.g. `'@mui/material'`. */
@@ -37,6 +38,7 @@ export function createResolver(
   factoryOptions: CreateResolverOptions
 ): ComponentResolver {
   const { module: moduleName, prefix = "", exclude, style } = factoryOptions;
+  warnNonPascalPrefix(prefix, `createResolver(${moduleName})`);
 
   let names: string[] = [];
 

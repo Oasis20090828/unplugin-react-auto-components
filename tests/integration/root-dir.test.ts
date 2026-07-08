@@ -146,3 +146,37 @@ describe('rootDir option', () => {
     expect(codeOf(out)).toContain("import Widget from '../components/Widget'")
   })
 })
+
+describe('monorepo via glob (multi-package scanning — #11)', () => {
+  it('discovers + auto-imports components across packages from one root + glob', async () => {
+    // A fake monorepo: components live under packages/<pkg>/src, no top-level src/.
+    mkdirSync(join(root, 'packages', 'ui', 'src'), { recursive: true })
+    mkdirSync(join(root, 'packages', 'feature', 'src'), { recursive: true })
+    writeFileSync(join(root, 'packages', 'ui', 'src', 'Alpha.tsx'), comp('Alpha'))
+    writeFileSync(join(root, 'packages', 'feature', 'src', 'Beta.tsx'), comp('Beta'))
+
+    const plugin = realize(
+      callFactory({
+        rootDir: root,
+        globs: ['packages/*/src/**/*.tsx'],
+        local: true,
+        dts: true,
+      }),
+    )
+    await plugin.buildStart()
+
+    // Both packages' components land in one shared component set / dts.
+    const dts = readFileSync(join(root, 'components.d.ts'), 'utf-8')
+    expect(dts).toMatch(/const Alpha:/)
+    expect(dts).toMatch(/const Beta:/)
+
+    // A consumer in packages/feature auto-imports both — same-package and
+    // cross-package relative paths are computed from the consumer file.
+    const appId = join(root, 'packages', 'feature', 'src', 'App.tsx')
+    const out = codeOf(
+      plugin.transform(`function App(){ return <div><Alpha/><Beta/></div> }`, appId),
+    )
+    expect(out).toMatch(/import Beta from '\.\/Beta'/)
+    expect(out).toMatch(/import Alpha from '\.\.\/\.\.\/ui\/src\/Alpha'/)
+  })
+})

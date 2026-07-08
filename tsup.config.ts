@@ -11,7 +11,6 @@ const entry = {
   farm: "src/farm.ts",
   next: "src/next.ts",
   resolvers: "src/resolvers.ts",
-  types: "src/types.ts",
 };
 
 export default defineConfig({

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import type { ComponentResolveResult, ComponentResolver } from "../../types";
-import { toKebabCase } from "../utils";
+import { toKebabCase, warnNonPascalPrefix } from "../utils";
 import { discoverExports } from "../discover";
 
 // ---------------------------------------------------------------------------
@@ -223,15 +223,7 @@ export function AntdResolver(
   // A lowercase-initial prefix can never work: JSX compiles `<antButton>` to
   // the string "antButton" (a host element), so it never becomes a component
   // reference we can rewrite. The prefix must be PascalCase.
-  if (prefix && !/^[A-Z]/.test(prefix)) {
-    const fixed = prefix.charAt(0).toUpperCase() + prefix.slice(1);
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[unplugin-react-auto-components] AntdResolver: prefix "${prefix}" must start with an uppercase letter. ` +
-        `JSX treats <${prefix}Button> as a host element, so it will never be auto-imported. ` +
-        `Use prefix "${fixed}" and write <${fixed}Button>.`
-    );
-  }
+  warnNonPascalPrefix(prefix, "AntdResolver");
   const lib = cjs ? "lib" : "es";
   // The behavior splits on v5: v5+ is CSS-in-JS (no style import) and uses the
   // v5+ component set; anything below 5 (v4 and earlier) gets CSS imports and

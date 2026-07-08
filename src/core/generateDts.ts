@@ -11,6 +11,7 @@ import type {
   ComponentResolveResult,
   ComponentsContext,
   GenerateDtsOptions,
+  ImportPathTransform,
 } from "../types";
 import { isExportComponent, slash } from "./utils";
 import { listAllComponents, resolveLocalJsxNames } from "./manager";
@@ -74,20 +75,25 @@ function atomicWriteDts(outPath: string, dts: string) {
   }
 }
 
-function stringifyLocal(rootPath: string, c: ComponentsContext) {
+function stringifyLocal(
+  rootPath: string,
+  c: ComponentsContext,
+  xform?: ImportPathTransform,
+) {
   // `relative` produces e.g. `src/Hello.tsx` when the dts sits above the
   // component, or `../components/Hello.tsx` when it sits in a sibling dir
   // (`src/types/`). Only the first case needs a `./` prefix; the second
   // form is already valid TS path syntax.
   let rel = relative(rootPath, c.path);
   if (!rel.startsWith(".")) rel = `./${rel}`;
+  const spec = slash(rel).replace(/\.[jt]sx$/, "");
   const key = isExportComponent(c) ? c.name : "default";
-  return `typeof import('${slash(rel).replace(/\.[jt]sx$/, "")}')['${key}']`;
+  return `typeof import('${xform?.(spec) ?? spec}')['${key}']`;
 }
 
-function stringifyResolved(r: ComponentResolveResult) {
+function stringifyResolved(r: ComponentResolveResult, xform?: ImportPathTransform) {
   const key = (r.type ?? "Export") === "Export" ? r.name : "default";
-  return `typeof import('${r.from}')['${key}']`;
+  return `typeof import('${xform?.(r.from) ?? r.from}')['${key}']`;
 }
 
 /**
@@ -147,6 +153,7 @@ export function generateDts(options: GenerateDtsOptions) {
     filename = "components",
     resolvers,
     local,
+    importPathTransform,
   } = options;
 
   // Map<identifier, Entry>. Insertion order is what we emit, but local entries
@@ -162,12 +169,15 @@ export function generateDts(options: GenerateDtsOptions) {
     const localNames = resolveLocalJsxNames(components);
     for (const [jsxName, c] of localNames) {
       entries.set(jsxName, {
-        body: stringifyLocal(rootPath, c),
+        body: stringifyLocal(rootPath, c, importPathTransform),
         source: c.path,
         isLocal: true,
       });
     }
-    warnLocalCollisions(components, localNames);
+    // Warn from the deduped, actually-emitted set (localNames' values), not the
+    // raw `components` — otherwise a barrel re-export that was dropped as a
+    // duplicate would trigger a spurious "N components named X" warning.
+    warnLocalCollisions(localNames.values(), localNames);
   }
 
   for (const item of listAllComponents(resolvers)) {
@@ -186,7 +196,7 @@ export function generateDts(options: GenerateDtsOptions) {
       continue;
     }
     entries.set(item.jsxName, {
-      body: stringifyResolved(item),
+      body: stringifyResolved(item, importPathTransform),
       source: item.from,
       isLocal: false,
     });

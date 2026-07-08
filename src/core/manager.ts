@@ -29,7 +29,6 @@ export function resolveComponent(
 ): ComponentResolveResult | undefined {
   if (!resolvers || !resolvers.length) return;
   for (const r of resolvers) {
-    if (r.type !== "component") continue;
     const hit = r.resolve(jsxName);
     if (hit) return hit;
   }
@@ -85,8 +84,19 @@ function uniqueNamespaced(
 export function resolveLocalJsxNames(
   components: Iterable<ComponentsContext>,
 ): Map<string, ComponentsContext> {
+  // A barrel re-export (`export { Button } from './Button'`) and the direct
+  // definition it points at both surface as `Button`. When the direct file was
+  // scanned too, drop the re-export so one component isn't split into two tags
+  // (`<Button/>` + a namespaced `<ComponentsButton/>`). Re-exports of names not
+  // found by direct scan (e.g. a barrel over an unscanned `.ts`) are kept.
+  const list = [...components];
+  const directNames = new Set(
+    list.filter((c) => !c.reexport).map((c) => c.name),
+  );
+
   const byName = new Map<string, ComponentsContext[]>();
-  for (const c of components) {
+  for (const c of list) {
+    if (c.reexport && directNames.has(c.name)) continue;
     const arr = byName.get(c.name);
     if (arr) arr.push(c);
     else byName.set(c.name, [c]);
@@ -130,7 +140,7 @@ export function listAllComponents(
   if (!resolvers || !resolvers.length) return [];
   const out: ComponentResolveResult[] = [];
   for (const r of resolvers) {
-    if (r.type !== "component" || !r.list) continue;
+    if (!r.list) continue;
     for (const item of r.list()) out.push(item);
   }
   return out;

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "fs";
 import { resolve } from "path";
 import type { ComponentResolveResult, ComponentResolver } from "../../types";
-import { toKebabCase } from "../utils";
+import { toKebabCase, warnNonPascalPrefix } from "../utils";
 
 export interface ShadcnResolverOptions {
   /**
@@ -92,6 +92,7 @@ export function ShadcnResolver(
     defaultExport = false,
     exclude,
   } = options;
+  warnNonPascalPrefix(prefix, "ShadcnResolver");
 
   let names: string[];
   if (options.components && options.components.length) {

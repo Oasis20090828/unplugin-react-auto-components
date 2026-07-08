@@ -40,51 +40,47 @@ function jsxRootName(name: Node): string | null {
   return null;
 }
 
-/**
- * Collect every identifier the module already binds — imports and top-level
- * declarations. We must NOT auto-import a name that's already in scope, or we'd
- * clobber the user's own binding (e.g. `import App from './App'` colliding with
- * antd's `App` component).
- */
-function collectBoundNames(src: string): Set<string> {
-  const bound = new Set<string>();
-
-  // import clauses: `import <clause> from '...'`
-  const importRE = /import\s+([\s\S]*?)\s+from\s*['"][^'"]+['"]/g;
-  let m: RegExpExecArray | null;
-  while ((m = importRE.exec(src))) {
-    const clause = m[1];
-
-    // named bindings: { a, b as c }  → local names a, c
-    const named = clause.match(/\{([\s\S]*?)\}/);
-    if (named) {
-      for (const part of named[1].split(",")) {
-        const seg = part.trim();
-        if (!seg) continue;
-        const local = /\sas\s/.test(seg) ? seg.split(/\sas\s/)[1].trim() : seg;
-        if (/^[A-Za-z_$][\w$]*$/.test(local)) bound.add(local);
+/** Add every identifier a binding pattern introduces (handles destructuring). */
+function collectPatternNames(node: Node, out: Set<string>): void {
+  switch (node.type) {
+    case "Identifier":
+      out.add(node.name);
+      break;
+    case "ObjectPattern":
+      for (const p of node.properties) {
+        if (p.type === "ObjectProperty") collectPatternNames(p.value as Node, out);
+        else collectPatternNames(p.argument as Node, out); // RestElement
       }
-    }
-
-    // default + namespace bindings live outside the braces
-    const outside = clause.replace(/\{[\s\S]*?\}/, " ");
-    for (let tok of outside.split(",")) {
-      tok = tok.trim();
-      const ns = tok.match(/\*\s*as\s+([\w$]+)/);
-      if (ns) {
-        bound.add(ns[1]);
-        continue;
-      }
-      if (/^[A-Za-z_$][\w$]*$/.test(tok)) bound.add(tok);
-    }
+      break;
+    case "ArrayPattern":
+      for (const el of node.elements) if (el) collectPatternNames(el as Node, out);
+      break;
+    case "AssignmentPattern":
+      collectPatternNames(node.left as Node, out);
+      break;
+    case "RestElement":
+      collectPatternNames(node.argument as Node, out);
+      break;
   }
+}
 
-  // top-level declarations: function/class/const/let/var Name
-  const declRE =
-    /(?:^|[;{}\n])\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/g;
-  while ((m = declRE.exec(src))) bound.add(m[1]);
-
-  return bound;
+/**
+ * Char offset at which injected imports must go so they land AFTER a module's
+ * directive prologue (`"use client"` / `"use server"` / `"use strict"`), or `0`
+ * when there's no directive. Prepending imports at position 0 would push them
+ * above `"use client"`, which then stops being the first statement — Next.js
+ * silently demotes the file to a Server Component and the build breaks. React
+ * allows imports after the directive, so we insert right before the first real
+ * statement (keeping any leading comments above the imports too).
+ */
+function directivePrologueEnd(program: File): number {
+  const prog = program.program;
+  const dirs = prog.directives;
+  if (!dirs || !dirs.length) return 0;
+  const firstStmt = prog.body[0];
+  if (firstStmt && typeof firstStmt.start === "number") return firstStmt.start;
+  const lastDir = dirs[dirs.length - 1];
+  return typeof lastDir.end === "number" ? lastDir.end : 0;
 }
 
 interface ResolvedImport {
@@ -106,7 +102,8 @@ interface ResolvedImport {
  * where there is no `jsx(...)` for a post pass to match.
  */
 export function transform(options: TransformOptions) {
-  const { code, components, resolvers, local, id, consumerUsage } = options;
+  const { code, components, resolvers, local, id, consumerUsage, importPathTransform } =
+    options;
   const src = code.original;
 
   // Clear stale usage records for this file before we re-record. If the user
@@ -130,23 +127,50 @@ export function transform(options: TransformOptions) {
     return code.toString();
   }
 
-  // Capital-cased component names actually used in JSX, in first-seen order.
+  // Single AST pass collecting BOTH:
+  //   • `used`       — capital-cased component names referenced in JSX
+  //   • `boundNames` — identifiers the module already binds (value imports +
+  //                    function/class/`const`/`let`/`var`, incl. destructuring)
+  //
   // Parsing (not a regex) is what keeps TS generics like `useRef<HTMLDivElement>()`
-  // or `Map<string, Foo>` from being mistaken for components.
+  // from being mistaken for components, AND makes binding detection immune to
+  // import/declaration keywords inside comments or strings. `import type { X }` /
+  // `import { type X }` are erased at runtime, so they're NOT treated as bindings
+  // (a type-only import never blocks the value import). One walk, not two — this
+  // is the per-file hot path.
   const used = new Set<string>();
+  const boundNames = new Set<string>();
   walk(program as unknown as EstreeNode, {
     enter(rawNode) {
       const node = rawNode as unknown as Node;
       if (node.type === "JSXOpeningElement") {
         const name = jsxRootName(node.name as Node);
         if (name) used.add(name);
+        return;
+      }
+      switch (node.type) {
+        case "ImportDeclaration": {
+          if (node.importKind === "type") return this.skip(); // `import type { … }`
+          for (const spec of node.specifiers) {
+            if (spec.type === "ImportSpecifier" && spec.importKind === "type")
+              continue; // `import { type X }`
+            boundNames.add(spec.local.name);
+          }
+          return this.skip();
+        }
+        case "FunctionDeclaration":
+        case "ClassDeclaration":
+          if (node.id) boundNames.add(node.id.name);
+          break;
+        case "VariableDeclarator":
+          collectPatternNames(node.id as Node, boundNames);
+          break;
       }
     },
   });
 
   if (!used.size) return code.toString();
 
-  const boundNames = collectBoundNames(src);
   const imports: string[] = [];
   const injected: string[] = [];
 
@@ -210,6 +234,11 @@ export function transform(options: TransformOptions) {
       usedSet.add(name);
     }
 
+    // Let the user rewrite the specifier (e.g. `antd` → `antd/es`). The same
+    // rewrite runs in generateDts, so the injected import and the emitted .d.ts
+    // stay in agreement. Style side-effect paths are left untouched.
+    const from = importPathTransform?.(info.from) ?? info.from;
+
     // Bind the JSX name directly — no call-site rewriting needed, because the
     // bundler turns `<Name/>` into `jsx(Name)` which then resolves to this import.
     // `<AntButton/>` → import { Button as AntButton } from 'antd'
@@ -217,11 +246,11 @@ export function transform(options: TransformOptions) {
     if (isExportComponent(info.type)) {
       imports.push(
         info.importName === name
-          ? stringifyImport({ name, from: info.from })
-          : stringifyImport({ name: info.importName, as: name, from: info.from }),
+          ? stringifyImport({ name, from })
+          : stringifyImport({ name: info.importName, as: name, from }),
       );
     } else {
-      imports.push(stringifyImport({ default: name, from: info.from }));
+      imports.push(stringifyImport({ default: name, from }));
     }
 
     if (info.style) imports.push(stringifyImport(info.style));
@@ -229,7 +258,12 @@ export function transform(options: TransformOptions) {
   }
 
   if (imports.length) {
-    code.prepend(`${imports.join("\n")}\n`);
+    const block = `${imports.join("\n")}\n`;
+    // Insert after any `"use client"` / `"use server"` prologue so the directive
+    // stays the module's first statement; otherwise prepend at the top.
+    const at = directivePrologueEnd(program);
+    if (at > 0) code.appendLeft(at, block);
+    else code.prepend(block);
     dbg(`${id}: injected ${imports.length} import(s) for [${injected.join(", ")}]`);
   }
 

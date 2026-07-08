@@ -30,6 +30,11 @@ export default defineConfig({
       ],
       // Emit components.d.ts so the editor knows the globals.
       dts: true,
+      // Demo of `importPathTransform`: redirect antd's barrel to its ESM build.
+      // Every auto-injected `<AntButton/>` import — and its components.d.ts
+      // type — now points at `antd/es` instead of `antd`. Returning `undefined`
+      // leaves all other specifiers (shadcn, local relative paths) untouched.
+      importPathTransform: (path) => (path === "antd" ? "antd/es" : undefined),
     }),
   ],
 });

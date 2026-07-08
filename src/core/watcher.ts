@@ -190,11 +190,39 @@ export function attachComponentHandlers(
     for (const n of namesBefore) if (!namesAfter.has(n)) affectedNames.add(n);
     for (const n of namesAfter) if (!namesBefore.has(n)) affectedNames.add(n);
 
-    if (changed) emitDts?.();
+    // `drain` runs inside `process.nextTick`, so a throw here is an UNCAUGHT
+    // exception that can kill the dev-server process. Guard the two calls that
+    // can realistically throw (everything else — scanFile, set math — is pure or
+    // internally caught).
+    if (changed) {
+      try {
+        emitDts?.();
+      } catch (err) {
+        // A transient dts write failure (Windows file lock, unwritable path)
+        // must not take down the watcher. The in-memory component set is already
+        // updated, so transforms still inject correctly; skip this write and
+        // re-attempt on the next change.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[unplugin-react-auto-components] failed to write components.d.ts; ` +
+            `skipping this update (will retry on the next change).`,
+          err
+        );
+      }
+    }
     dbg(
       `flush: events=${events.length}, changed=${changed}, affected=[${[...affectedNames].join(",")}]`
     );
-    onFlush?.(events, { changed, affectedNames });
+    try {
+      onFlush?.(events, { changed, affectedNames });
+    } catch (err) {
+      // An HMR/rebuild handler throwing shouldn't crash the dev server either.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[unplugin-react-auto-components] watcher onFlush handler threw (ignored):`,
+        err
+      );
+    }
   };
 
   const schedule = () => {

@@ -21,8 +21,12 @@ export interface ComponentResolveResult {
 }
 
 export interface ComponentResolver {
-  /** Reserved for future use; currently only `'component'` is honored. */
-  type: "component" | "directive";
+  /**
+   * Resolver kind. Optional and only ever `'component'` — React has no
+   * directive concept. Left in place so the built-in resolvers can keep tagging
+   * themselves; you can omit it in custom resolvers.
+   */
+  type?: "component";
   /**
    * Optional async initialization, awaited once by the plugin in `buildStart`
    * before any `resolve()`/`list()` call. Use it for work that can't run
@@ -45,6 +49,17 @@ export type Resolvers = ComponentResolver[];
 // ---------------------------------------------------------------------------
 // Plugin options
 // ---------------------------------------------------------------------------
+
+/**
+ * Rewrite the module specifier of an auto-injected import. Receives the path
+ * the plugin resolved to (a resolver's `from`, or a relative path to a local
+ * component) and returns a replacement, or `undefined` to keep it as-is. The
+ * same rewrite is applied to the matching `components.d.ts` declaration, so the
+ * emitted types always track the injected imports.
+ *
+ * @example (path) => (path === 'antd' ? 'antd/es' : undefined)
+ */
+export type ImportPathTransform = (path: string) => string | undefined;
 
 export interface Options {
   /** Root directory to scan local components and emit dts. */
@@ -73,6 +88,8 @@ export interface Options {
    * @example ['src/components/**\/*.tsx', '!**\/*.test.tsx']
    */
   globs?: string[];
+  /** Rewrite the specifier of every auto-injected import. See {@link ImportPathTransform}. */
+  importPathTransform?: ImportPathTransform;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +107,13 @@ export interface ComponentsContext {
   name: string;
   path: string;
   type: ExportType | "Declaration";
+  /**
+   * True when discovered via a barrel re-export (`export { X } from './x'`)
+   * rather than a direct definition. The manager drops such an entry if the
+   * same name is also found by a direct scan, so a re-exported component isn't
+   * counted twice (and needlessly namespaced).
+   */
+  reexport?: boolean;
 }
 
 export type Components = Set<ComponentsContext>;
@@ -118,6 +142,8 @@ export interface TransformOptions {
    * instead of a blanket page reload.
    */
   consumerUsage?: Map<string, Set<string>>;
+  /** See {@link ImportPathTransform}. Applied to each injected import's specifier. */
+  importPathTransform?: ImportPathTransform;
 }
 
 export interface GenerateDtsOptions {
@@ -126,6 +152,8 @@ export interface GenerateDtsOptions {
   filename: string;
   resolvers: Resolvers;
   local: boolean;
+  /** See {@link ImportPathTransform}. Applied to each declaration's `import(...)` path. */
+  importPathTransform?: ImportPathTransform;
 }
 
 export interface SearchGlobOptions {

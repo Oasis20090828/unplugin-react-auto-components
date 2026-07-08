@@ -1,4 +1,5 @@
 import type { ComponentResolveResult, ComponentResolver } from "../../types";
+import { warnNonPascalPrefix } from "../utils";
 
 // @keep-sorted
 const components = [
@@ -101,6 +102,7 @@ export function AntdMobileResolver(
   options: AntdMobileResolverOptions = {}
 ): ComponentResolver {
   const { prefix = "", exclude } = options;
+  warnNonPascalPrefix(prefix, "AntdMobileResolver");
   const matchable = exclude
     ? components.filter((c) => !exclude(c))
     : components;

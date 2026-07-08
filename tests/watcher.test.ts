@@ -1,13 +1,15 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // Force chokidar to poll instead of using native FS events. Native fsevents can
 // silently drop/delay events when the whole suite runs in parallel (many test
 // files contend for CPU) — the source of this file's historical flake. Polling
@@ -18,6 +20,7 @@ process.env.CHOKIDAR_INTERVAL = "20";
 
 import { createComponentWatcher, type FileEvent } from "../src/core/watcher";
 import { searchGlob } from "../src/core/searchGlob";
+import { unpluginFactory } from "../src/index";
 import type { Components } from "../src/types";
 
 let root: string;
@@ -162,4 +165,107 @@ describe("createComponentWatcher (batched via process.nextTick)", () => {
 
     await watcher.close();
   }, 5000);
+});
+
+// unplugin's factory type wants a (options, meta) pair; our tests only supply
+// options, so wrap it into a 1-arg call (as the other integration tests do).
+const callFactory = unpluginFactory as unknown as (
+  o: Record<string, unknown>
+) => Record<string, unknown>;
+
+describe("factory watch wiring (rollup / rolldown / rspack / farm — #8)", () => {
+  it("exposes the per-bundler watch hooks on the factory output", () => {
+    const p = callFactory({ local: false, dts: false }) as unknown as {
+      rspack?: unknown;
+      rollup?: { closeWatcher?: unknown };
+      rolldown?: { closeWatcher?: unknown };
+      farm?: { configureDevServer?: unknown };
+    };
+    expect(typeof p.rspack).toBe("function"); // webpack-clone compiler hook
+    expect(typeof p.rollup?.closeWatcher).toBe("function");
+    expect(typeof p.rolldown?.closeWatcher).toBe("function");
+    expect(typeof p.farm?.configureDevServer).toBe("function");
+  });
+
+  const mkProj = () => {
+    const proj = realpathSync(mkdtempSync(join(tmpdir(), "urc-factory-watch-")));
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(
+      join(proj, "src", "Seed.tsx"),
+      "export default function Seed(){ return <div/> }"
+    );
+    const dtsPath = join(proj, "src", "components.d.ts");
+    const dtsHas = (n: string) =>
+      existsSync(dtsPath) && readFileSync(dtsPath, "utf8").includes(`const ${n}:`);
+    return { proj, dtsHas };
+  };
+
+  it("buildStart starts a watcher when this.meta.watchMode is true (Rollup/Rolldown)", async () => {
+    const { proj, dtsHas } = mkProj();
+    try {
+      const p = callFactory({ rootDir: proj, local: true, dts: true }) as unknown as {
+        buildStart: (this: unknown) => Promise<void>;
+        rollup: { closeWatcher: () => void };
+      };
+      await p.buildStart.call({ meta: { watchMode: true } });
+      expect(dtsHas("Seed")).toBe(true); // initial emit
+      await wait(800); // let chokidar finish its initial scan before we add
+      writeFileSync(
+        join(proj, "src", "Added.tsx"),
+        "export default function Added(){ return <span/> }"
+      );
+      expect(await waitFor(() => dtsHas("Added"), 8000)).toBe(true); // watcher caught the add
+      p.rollup.closeWatcher();
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it("buildStart does NOT start a watcher for a one-shot build (watchMode falsey)", async () => {
+    const { proj, dtsHas } = mkProj();
+    try {
+      const p = callFactory({ rootDir: proj, local: true, dts: true }) as unknown as {
+        buildStart: (this: unknown) => Promise<void>;
+      };
+      await p.buildStart.call({ meta: { watchMode: false } });
+      writeFileSync(
+        join(proj, "src", "Added.tsx"),
+        "export default function Added(){ return <span/> }"
+      );
+      await wait(600);
+      expect(dtsHas("Added")).toBe(false); // no watcher → dts untouched
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }, 10000);
+});
+
+describe("createComponentWatcher — a throwing emitDts / onFlush never crashes the watcher", () => {
+  it("catches an emitDts that throws and still calls onFlush", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let flushed = false;
+    const watcher = createComponentWatcher({
+      rootDir: root,
+      components,
+      emitDts: () => {
+        throw new Error("simulated components.d.ts write failure");
+      },
+      onFlush: () => {
+        flushed = true;
+      },
+    });
+    await new Promise<void>((r) => watcher.once("ready", () => r()));
+
+    const f = join(root, "src", "Boom.tsx");
+    writeFileSync(f, "export default function Boom(){ return <i/> }");
+    // If the throw weren't caught it would surface in process.nextTick (crash);
+    // instead onFlush runs and a warning is logged.
+    expect(await waitFor(() => flushed)).toBe(true);
+    expect(warn).toHaveBeenCalled();
+
+    rmSync(f);
+    await waitFor(() => ![...components].some((c) => c.name === "Boom"));
+    await watcher.close();
+    warn.mockRestore();
+  }, 10000);
 });

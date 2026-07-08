@@ -42,6 +42,26 @@ export function pascalCase(str: string) {
 }
 
 /**
+ * Warn when a resolver `prefix` isn't PascalCase. JSX only treats
+ * uppercase-initial tags as components, so a lowercase prefix silently fails:
+ * `<uiButton/>` compiles to a host element that no resolver can rewrite. Shared
+ * by every prefix-taking resolver so the guidance is identical everywhere.
+ */
+export function warnNonPascalPrefix(
+  prefix: string | undefined,
+  resolver: string,
+): void {
+  if (!prefix || /^[A-Z]/.test(prefix)) return;
+  const fixed = pascalCase(prefix) || prefix[0].toUpperCase() + prefix.slice(1);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[unplugin-react-auto-components] ${resolver}: prefix "${prefix}" must start with an ` +
+      `uppercase letter. JSX treats <${prefix}Button> as a host element, so it will never be ` +
+      `auto-imported. Use prefix "${fixed}".`,
+  );
+}
+
+/**
  * Convert PascalCase / camelCase / snake_case to kebab-case.
  * `DatePicker` → `date-picker`, `TreeSelect` → `tree-select`.
  *
@@ -124,5 +144,7 @@ export function resolveOptions(options: Options = {}): Required<Options> {
     local: typeof options.local === "boolean" ? options.local : true,
     dirs: options.dirs ?? [],
     globs: resolveGlobs(options),
+    // No-op default keeps every specifier as-is; call sites apply `?? original`.
+    importPathTransform: options.importPathTransform ?? (() => undefined),
   };
 }

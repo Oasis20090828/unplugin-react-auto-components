@@ -1,0 +1,45 @@
+name: CI
+
+# Runs the quality gate (type-check + tests + build) on every push and PR, so a
+# regression is caught here — before it can reach the Publish workflow.
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"] # tag pushes are handled by publish.yml
+  pull_request:
+
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # pnpm must be set up before setup-node so `cache: pnpm` can find it.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22 # package.json engines requires Node >= 20.19
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm run type-check
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm run build
